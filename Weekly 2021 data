@@ -26635,26 +26635,71 @@ wr_21_avg <- wr_21|>
   select(Player:WR_TPRR_Role,WR_YPT_Role,WR_YPTOE_Role,WR_YPRR_Role,WR_ADOT_Role,WR_AY_Share_Role,WR_YAC_Role,WR_YAC_REC_Role,WR_TM_RecYDS_PCT_Role,WR_Catch_Rate_Role,
          WR_TGT_TD_PCT_Role,WR_EZTGT_Role:WR_TPRR_Role_avg,WR_YPT_Role_avg,WR_YPTOE_Role_avg,WR_YPRR_Role_avg,WR_ADOT_Role_avg,WR_AY_Share_Role_avg,WR_YAC_Role_avg,WR_YAC_REC_Role_avg,
          WR_TM_RecYDS_PCT_Role_avg,WR_Catch_Rate_Role_avg,WR_TGT_TD_PCT_Role_avg,WR_EZTGT_Role_avg:avg_total_RecXFP)
-Team_schedule_matchups_21_avg <- Team_schedule_matchups_21|>
-  select(Name:SEA,Head_Coach,HC_pace_Role_avg:avg_total_wind_off,Name_DEF,TM_DEF,Head_Coach_DEF,G_total_off:avg_total_wind_def)
-Team_schedule_matchups_21_unique <- Team_schedule_matchups_21_avg %>%
+Team_schedule_matchups_21_avg <- Team_schedule_matchups_21 |>
+  select(
+    Name:SEA,
+    Head_Coach,
+    HC_pace_Role_avg:avg_total_wind_off,
+    Name_DEF,
+    TM_DEF,
+    Head_Coach_DEF,
+    G_total_off:avg_total_wind_def
+  )
+
+team_matchups_21_off_avg <- Team_schedule_matchups_21_avg %>%
+  select(TM, Name, Head_Coach, HC_pace_Role_avg:avg_total_wind_off) %>%
   distinct(TM, .keep_all = TRUE)
-wr_21_avg <- wr_21_avg %>%
-  distinct(Player, .keep_all = TRUE)
-wr_sch_21_avg <- wr_21_avg|>
-  left_join(Team_schedule_matchups_21_unique,by = c("TM"))|>
-  rename(SEA = SEA.x,TM_DEF = TM_DEF.x)|>
-  select(-SEA.y,-TM_DEF.y)
 
-wr_data_clean <- wr_sch_21_avg %>%
-  select(-any_of(c("WK", "SEA","TM_DEF")))
+team_matchups_21_def_avg <- Team_schedule_matchups_21_avg %>%
+  select(TM_DEF, Name_DEF, Head_Coach_DEF, G_total_off:avg_total_wind_def) %>%
+  distinct(TM_DEF, .keep_all = TRUE)
+
+wr_21_avg <- wr_21 |>
+  select(
+    Player:WR_TPRR_Role,
+    WR_YPT_Role,
+    WR_YPTOE_Role,
+    WR_YPRR_Role,
+    WR_ADOT_Role,
+    WR_AY_Share_Role,
+    WR_YAC_Role,
+    WR_YAC_REC_Role,
+    WR_TM_RecYDS_PCT_Role,
+    WR_Catch_Rate_Role,
+    WR_TGT_TD_PCT_Role,
+    WR_EZTGT_Role:WR_TPRR_Role_avg,
+    WR_YPT_Role_avg,
+    WR_YPTOE_Role_avg,
+    WR_YPRR_Role_avg,
+    WR_ADOT_Role_avg,
+    WR_AY_Share_Role_avg,
+    WR_YAC_Role_avg,
+    WR_YAC_REC_Role_avg,
+    WR_TM_RecYDS_PCT_Role_avg,
+    WR_Catch_Rate_Role_avg,
+    WR_TGT_TD_PCT_Role_avg,
+    WR_EZTGT_Role_avg:avg_total_RecXFP
+  ) |>
+  distinct(Player, TM, SEA, .keep_all = TRUE)
+
+wr_data_clean <- wr_21_avg %>%
+  left_join(team_matchups_21_off_avg, by = "TM") %>%
+  select(-any_of(c("WK", "TM_DEF", "gameday", "gametime", "weekday", "G")))
+
 wr_sch_21_avg <- schedule_21 %>%
-  inner_join(wr_data_clean, by = "TM")
+  inner_join(wr_data_clean, by = c("TM", "SEA")) %>%
+  left_join(team_matchups_21_def_avg, by = "TM_DEF") %>%
+  select(
+    Player:depth_team,
+    TM:gametime,
+    G_total,
+    TM_DEF,
+    WR_Depth_Role,
+    Draft_Day:shuttle,
+    WR_forty_Role:avg_total_wind_def,
+    away_score:stadium
+  )
 
-wr_sch_21_avg <- wr_sch_21_avg|>
-  rename(gametime = gametime.x,weekday = weekday.x,gameday = gameday.x)|>
-  select(-gameday.y,-gametime.y,-weekday.y)|>
-  select(Player:depth_team,TM:gametime,G_total_off,TM_DEF,WR_Depth_Role,Draft_Day:shuttle,WR_forty_Role:avg_total_wind_def,away_score:stadium)
 
 #TEs 
 TE_rec_adv_21_wk1 <- read.csv("~/NFLfastR/2021 Data/Rec 2021 WK1.csv")|>
