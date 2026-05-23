@@ -23660,17 +23660,28 @@ rb_adv_21 <- rb_adv_21_wk1|>
 #combine rb schedule
 rb_sch_21 <- rb_adv_21|>
   left_join(Team_schedule_matchups_21,by = c("TM" = "TM","G" = "G","WK" = "WK"),suffix = c("_ply","_team"))|>
-  rename(SEA = SEA_ply)
+  rename(SEA = SEA_ply)|>
+  select(-dplyr::any_of("SEA_team"))|>
+  mutate(
+    fantasyPts = dplyr::coalesce(
+      FP_G_rush,
+      dplyr::coalesce(YDS_rush, 0) * 0.10 +
+        dplyr::coalesce(YDS, 0) * 0.10 +
+        6 * dplyr::coalesce(TD_rush, 0) +
+        6 * dplyr::coalesce(TD, 0)
+    )
+  )|>
+  relocate(fantasyPts, .before = depth_team)
 rb_sch_21$depth_team <- as.numeric(rb_sch_21$depth_team)
 rb_sch_21 <- rb_sch_21|> 
   mutate(CAR_PCT = round((CAR / CAR_off) * 100, 1),
          YDS_rush_PCT = round((YDS_rush / YDS_rush_off) * 100, 1),
          TD_rush_PCT = round((TD_rush / TD_rush_off) * 100,1),
          X1D_rush_PCT = round((X1D_rush / X1D_off) * 100,1))|>
-  select(Player:CAR,CAR_PCT,YDS_rush,YDS_rush_PCT,RuYDS_G,YPC,TD_rush,TD_rush_PCT,FUM,X1D_rush,X1D_rush_PCT,CAR_PCT_OVER_15:avg_total_wind_def)|>
+  select(Player:CAR,CAR_PCT,YDS_rush,YDS_rush_PCT,RuYDS_G,YPC,TD_rush,TD_rush_PCT,FUM,X1D_rush,X1D_rush_PCT,dplyr::any_of("gameday_off"),CAR_PCT_OVER_15:avg_total_wind_def)|>
   left_join(rb_roster_21, by = c("Player","TM","POS","SEA"))|>
   rename(gameday = gameday_off)|>
-  select(Player:depth_team,TM_DEF,birth_date,rookie_year,report_status:avg_total_wind_def)|>
+  select(Player:depth_team,TM_DEF,gameday,birth_date,rookie_year,report_status:avg_total_wind_def)|>
   left_join(rb_draft_picks,by = c("Player","POS","rookie_year"))|>
   select(Player:rookie_year,TM_draft,round, pick,report_status:avg_total_wind_def)|>
   left_join(combine_21, by = c("Player","POS","round","pick","rookie_year"))|>
@@ -24344,10 +24355,29 @@ rb_sch_21_avg <- schedule_21 %>%
 
 rb_sch_21_avg <- rb_sch_21_avg|>
   select(Player:depth_team,TM:gametime,G_total_off,TM_DEF,RB_Depth_Role,Draft_Day:shuttle,RB_Style_Role:avg_total_wind_def,away_score:stadium)
-
-# -------------------- RB final veteran metric block + matchup block --------------------
+# -------------------- RB final veteran metric block --------------------
 # Main output table: rb_sch_21_avg
-# Uses rb_sch_21 only to score/test which average features matter most
+# Official veteran RB score uses the v3b blend from the retest.
+# Team context and risk are stored, but not included in the official blend.
+
+pick_first_existing <- function(df, cols) {
+  cols <- cols[cols %in% names(df)]
+  if (length(cols) == 0) return(rep(NA_real_, nrow(df)))
+  
+  out <- suppressWarnings(as.numeric(df[[cols[1]]]))
+  if (length(cols) > 1) {
+    for (col in cols[-1]) {
+      out <- dplyr::coalesce(out, suppressWarnings(as.numeric(df[[col]])))
+    }
+  }
+  out
+}
+
+rb_build_group_score <- function(df, cols, target_col) {
+  cols <- intersect(cols, names(df))
+  if (length(cols) == 0) return(rep(NA_real_, nrow(df)))
+  build_group_score(df, cols, target_col)
+}
 
 # -------------------------------------------------------------------
 # 1) Build eval table
@@ -24355,20 +24385,24 @@ rb_sch_21_avg <- rb_sch_21_avg|>
 
 rb_metric_targets_21 <- rb_sch_21 %>%
   dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
   dplyr::arrange(Player, TM, WK, dplyr::desc(fantasyPts)) %>%
   dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
   dplyr::select(
     Player, TM, WK, fantasyPts,
     dplyr::any_of(c(
       "Opp",
-      "Scrm_YDs",
-      "Tot_TDs",
+      "OPP",
       "CAR",
-      "RuYDS_G",
-      "TD_rush",
       "TGT_G",
+      "YDS_rush",
+      "RuYDS_G",
       "YDS",
       "RecYDS_G",
+      "TD_rush",
+      "TD",
+      "Scrm_YDs",
+      "Tot_TDs",
       "FUM"
     ))
   ) %>%
@@ -24379,32 +24413,81 @@ rb_metric_targets_21 <- rb_sch_21 %>%
 
 rb_metric_df <- rb_sch_21_avg %>%
   dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
   dplyr::arrange(Player, TM, WK) %>%
   dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
-  dplyr::left_join(rb_metric_targets_21, by = c("Player", "TM", "WK")) %>%
+  dplyr::left_join(rb_metric_targets_21, by = c("Player", "TM", "WK"))
+
+rb_metric_df$Opp_week <- pick_first_existing(rb_metric_df, c("Opp_week", "OPP_week"))
+rb_metric_df$rush_yds_week <- pick_first_existing(rb_metric_df, c("YDS_rush_week", "RuYDS_G_week"))
+rb_metric_df$rec_yds_week <- pick_first_existing(rb_metric_df, c("YDS_week", "RecYDS_G_week"))
+rb_metric_df$td_rush_week <- pick_first_existing(rb_metric_df, c("TD_rush_week"))
+rb_metric_df$td_rec_week <- pick_first_existing(rb_metric_df, c("TD_week"))
+
+rb_metric_df <- rb_metric_df %>%
+  dplyr::mutate(
+    Scrm_YDs_week = dplyr::coalesce(Scrm_YDs_week, rush_yds_week + rec_yds_week),
+    Tot_TDs_week = dplyr::coalesce(Tot_TDs_week, dplyr::coalesce(td_rush_week, 0) + dplyr::coalesce(td_rec_week, 0)),
+    RB_Box_Fantasy_Target =
+      dplyr::coalesce(rush_yds_week, 0) * 0.10 +
+      dplyr::coalesce(rec_yds_week, 0) * 0.10 +
+      6 * dplyr::coalesce(td_rush_week, 0) +
+      6 * dplyr::coalesce(td_rec_week, 0)
+  ) %>%
   dplyr::filter(!is.na(fantasyPts_week))
 
 # -------------------------------------------------------------------
 # 2) Score veteran RB inputs
 # -------------------------------------------------------------------
 
-rb_positive_numeric_features <- intersect(
+rb_production_numeric <- intersect(
   c(
     "avg_total_fantasyPts",
     "avg_total_XFP_G_rush",
     "avg_total_RecXFP",
+    "avg_total_Scrm_YDs",
+    "avg_total_Tot_TDs"
+  ),
+  names(rb_metric_df)
+)
+
+rb_opportunity_numeric <- intersect(
+  c(
+    "avg_total_OPP",
+    "avg_total_Opp",
     "avg_total_CAR",
+    "avg_total_TGT_G",
     "avg_total_CAR_PCT",
     "avg_total_YDS_rush_PCT",
+    "avg_total_XFP_G_rush",
+    "avg_total_RecXFP"
+  ),
+  names(rb_metric_df)
+)
+
+rb_rush_eff_numeric <- intersect(
+  c(
     "avg_total_RuYDS_G",
     "avg_total_YPC",
     "avg_total_X1D_rush_PCT",
+    "avg_total_YPC_Z",
+    "avg_total_YPC_M"
+  ),
+  names(rb_metric_df)
+)
+
+rb_explosive_numeric <- intersect(
+  c(
     "avg_total_CAR_PCT_OVER_15",
     "avg_total_RUYDS_PCT_OVER_15",
     "avg_total_MTF_rush",
-    "avg_total_YACO_PCT",
-    "avg_total_YPC_Z",
-    "avg_total_YPC_M",
+    "avg_total_YACO_PCT"
+  ),
+  names(rb_metric_df)
+)
+
+rb_receiving_numeric <- intersect(
+  c(
     "avg_total_RTE_PCT",
     "avg_total_TGT_G",
     "avg_total_TGT_PCT",
@@ -24413,84 +24496,166 @@ rb_positive_numeric_features <- intersect(
     "avg_total_RATE",
     "avg_total_YDS",
     "avg_total_RecYDS_G",
-    "avg_total_TD_rush",
-    "avg_total_TD",
-    "avg_total_Tot_TDs",
-    "avg_total_Pts_scr",
-    "avg_total_RZ_opp",
-    "avg_total_total_plys_off",
-    "avg_total_EZTGT_off",
-    "avg_total_Opp",
-    "avg_total_Scrm_YDs"
+    "avg_total_RecXFP"
   ),
   names(rb_metric_df)
 )
 
-rb_risk_numeric_features <- intersect(
+rb_td_numeric <- intersect(
+  c(
+    "avg_total_TD_rush",
+    "avg_total_TD",
+    "avg_total_Tot_TDs",
+    "avg_total_RZ_opp",
+    "avg_total_EZTGT_off"
+  ),
+  names(rb_metric_df)
+)
+
+rb_team_numeric <- intersect(
+  c(
+    "avg_total_Pts_scr",
+    "avg_total_total_plys_off",
+    "avg_total_RZ_opp",
+    "avg_total_EZTGT_off"
+  ),
+  names(rb_metric_df)
+)
+
+rb_risk_numeric <- intersect(
   c("avg_total_FUM"),
   names(rb_metric_df)
 )
 
-rb_role_features <- intersect(
+rb_opp_role <- intersect(
   c(
     "RB_Depth_Role",
-    "RB_Style_Role_avg",
     "CAR_PCT_Vol_Role_avg",
-    "YDS_rush_PCT_Vol_Role_avg",
+    "YDS_rush_PCT_Vol_Role_avg"
+  ),
+  names(rb_metric_df)
+)
+
+rb_rush_role <- intersect(
+  c(
     "RB_Rush_Eff_Role_avg",
     "RB_X1D_rush_PCT_Role_avg",
+    "RB_Zone_Eff_Role_avg",
+    "RB_Gap_Eff_Role_avg"
+  ),
+  names(rb_metric_df)
+)
+
+rb_explosive_role <- intersect(
+  c(
     "RB_CAR_PCT_OVER_15_Role_avg",
     "RB_RUYDS_PCT_OVER_15_Role_avg",
     "RB_MTF_rush_Role_avg",
-    "RB_YACO_PCT_Role_avg",
-    "RB_GapvsZone_Role_avg",
-    "RB_Zone_Eff_Role_avg",
-    "RB_Gap_Eff_Role_avg",
+    "RB_YACO_PCT_Role_avg"
+  ),
+  names(rb_metric_df)
+)
+
+rb_receiving_role <- intersect(
+  c(
     "RB_RTE_Role_avg",
     "RB_TGT_PCT_Role_avg",
     "RB_TM_RecYDS_PCT_Role_avg",
     "RB_X1READ_PCT_Role_avg",
     "RB_RATE_Role_avg",
+    "RB_Style_Role_avg"
+  ),
+  names(rb_metric_df)
+)
+
+rb_td_team_role <- intersect(
+  c(
     "Team_Pts_scr_Role_avg",
     "Team_RZ_Role_avg"
   ),
   names(rb_metric_df)
 )
 
+rb_positive_numeric_features <- unique(c(
+  rb_production_numeric,
+  rb_opportunity_numeric,
+  rb_rush_eff_numeric,
+  rb_explosive_numeric,
+  rb_receiving_numeric,
+  rb_td_numeric,
+  rb_team_numeric
+))
+
 for (col in rb_positive_numeric_features) {
   rb_metric_df[[paste0("score_", col)]] <- pct_score(rb_metric_df[[col]], inverse = FALSE)
 }
 
-for (col in rb_risk_numeric_features) {
+for (col in rb_risk_numeric) {
   rb_metric_df[[paste0("score_", col)]] <- pct_score(rb_metric_df[[col]], inverse = TRUE)
-  rb_metric_df[[paste0("risk_score_", col)]] <- pct_score(rb_metric_df[[col]], inverse = FALSE)
 }
 
-for (col in rb_role_features) {
-  rb_metric_df[[paste0("score_", col)]] <- role_score_from_target(rb_metric_df[[col]], rb_metric_df$fantasyPts_week)
+for (col in rb_opp_role) {
+  rb_metric_df[[paste0("score_", col)]] <- role_score_from_target(
+    rb_metric_df[[col]],
+    rb_metric_df$fantasyPts_week
+  )
+}
+
+for (col in rb_rush_role) {
+  rb_metric_df[[paste0("score_", col)]] <- role_score_from_target(
+    rb_metric_df[[col]],
+    rb_metric_df$fantasyPts_week
+  )
+}
+
+for (col in rb_explosive_role) {
+  rb_metric_df[[paste0("score_", col)]] <- role_score_from_target(
+    rb_metric_df[[col]],
+    rb_metric_df$fantasyPts_week
+  )
+}
+
+for (col in rb_receiving_role) {
+  rb_metric_df[[paste0("score_", col)]] <- role_score_from_target(
+    rb_metric_df[[col]],
+    rb_metric_df$fantasyPts_week
+  )
+}
+
+for (col in rb_td_team_role) {
+  rb_metric_df[[paste0("score_", col)]] <- role_score_from_target(
+    rb_metric_df[[col]],
+    rb_metric_df$fantasyPts_week
+  )
 }
 
 # -------------------------------------------------------------------
 # 3) Veteran RB sub-metrics
 # -------------------------------------------------------------------
 
-rb_metric_df$RB_History_Metric_0to100 <- build_group_score(
+rb_metric_df$RB_Prior_Production_Metric_0to100 <- rb_build_group_score(
   rb_metric_df,
   c(
     "score_avg_total_fantasyPts",
     "score_avg_total_XFP_G_rush",
-    "score_avg_total_RecXFP"
+    "score_avg_total_RecXFP",
+    "score_avg_total_Scrm_YDs",
+    "score_avg_total_Tot_TDs"
   ),
   "fantasyPts_week"
 )
 
-rb_metric_df$RB_Rush_Volume_Metric_0to100 <- build_group_score(
+rb_metric_df$RB_Opportunity_Metric_0to100 <- rb_build_group_score(
   rb_metric_df,
   c(
+    "score_avg_total_OPP",
+    "score_avg_total_Opp",
     "score_avg_total_CAR",
+    "score_avg_total_TGT_G",
     "score_avg_total_CAR_PCT",
     "score_avg_total_YDS_rush_PCT",
-    "score_avg_total_RuYDS_G",
+    "score_avg_total_XFP_G_rush",
+    "score_avg_total_RecXFP",
     "score_RB_Depth_Role",
     "score_CAR_PCT_Vol_Role_avg",
     "score_YDS_rush_PCT_Vol_Role_avg"
@@ -24498,24 +24663,30 @@ rb_metric_df$RB_Rush_Volume_Metric_0to100 <- build_group_score(
   "fantasyPts_week"
 )
 
-rb_metric_df$RB_Rush_Efficiency_Metric_0to100 <- build_group_score(
+rb_metric_df$RB_Rush_Efficiency_Metric_0to100 <- rb_build_group_score(
   rb_metric_df,
   c(
+    "score_avg_total_RuYDS_G",
     "score_avg_total_YPC",
     "score_avg_total_X1D_rush_PCT",
+    "score_avg_total_YPC_Z",
+    "score_avg_total_YPC_M",
     "score_RB_Rush_Eff_Role_avg",
-    "score_RB_X1D_rush_PCT_Role_avg"
+    "score_RB_X1D_rush_PCT_Role_avg",
+    "score_RB_Zone_Eff_Role_avg",
+    "score_RB_Gap_Eff_Role_avg"
   ),
   "fantasyPts_week"
 )
 
-rb_metric_df$RB_Explosive_Metric_0to100 <- build_group_score(
+rb_metric_df$RB_Explosive_Metric_0to100 <- rb_build_group_score(
   rb_metric_df,
   c(
     "score_avg_total_CAR_PCT_OVER_15",
     "score_avg_total_RUYDS_PCT_OVER_15",
     "score_avg_total_MTF_rush",
     "score_avg_total_YACO_PCT",
+    "score_RB_CAR_PCT_OVER_15_Role_avg",
     "score_RB_RUYDS_PCT_OVER_15_Role_avg",
     "score_RB_MTF_rush_Role_avg",
     "score_RB_YACO_PCT_Role_avg"
@@ -24523,7 +24694,7 @@ rb_metric_df$RB_Explosive_Metric_0to100 <- build_group_score(
   "fantasyPts_week"
 )
 
-rb_metric_df$RB_Receiving_Metric_0to100 <- build_group_score(
+rb_metric_df$RB_Receiving_Metric_0to100 <- rb_build_group_score(
   rb_metric_df,
   c(
     "score_avg_total_RTE_PCT",
@@ -24545,7 +24716,7 @@ rb_metric_df$RB_Receiving_Metric_0to100 <- build_group_score(
   "fantasyPts_week"
 )
 
-rb_metric_df$RB_TD_Metric_0to100 <- build_group_score(
+rb_metric_df$RB_TD_Context_Metric_0to100 <- rb_build_group_score(
   rb_metric_df,
   c(
     "score_avg_total_TD_rush",
@@ -24559,52 +24730,37 @@ rb_metric_df$RB_TD_Metric_0to100 <- build_group_score(
   "fantasyPts_week"
 )
 
-rb_metric_df$RB_Team_Context_Metric_0to100 <- build_group_score(
+rb_metric_df$RB_Team_Context_Metric_0to100 <- rb_build_group_score(
   rb_metric_df,
   c(
     "score_avg_total_Pts_scr",
-    "score_avg_total_RZ_opp",
     "score_avg_total_total_plys_off",
-    "score_avg_total_EZTGT_off",
-    "score_Team_Pts_scr_Role_avg",
-    "score_Team_RZ_Role_avg"
+    "score_avg_total_RZ_opp",
+    "score_avg_total_EZTGT_off"
   ),
   "fantasyPts_week"
 )
 
-rb_metric_df$RB_Risk_Metric_0to100 <- build_group_score(
+rb_metric_df$RB_Risk_Metric_0to100 <- rb_build_group_score(
   rb_metric_df,
   c("score_avg_total_FUM"),
   "fantasyPts_week"
 )
 
-# Auxiliary usage/workload metric for later RB projection models
-rb_metric_df$RB_Workload_Metric_0to100 <- build_group_score(
-  rb_metric_df,
-  c(
-    "score_avg_total_Opp",
-    "score_avg_total_XFP_G_rush",
-    "score_avg_total_RecXFP",
-    "score_avg_total_CAR",
-    "score_avg_total_TGT_G"
-  ),
-  "fantasyPts_week"
-)
-
 # -------------------------------------------------------------------
-# 4) Base veteran RB fantasy metric
+# 4) Official veteran RB fantasy metric
+# v3b winner
 # -------------------------------------------------------------------
 
 rb_metric_df$RB_Fantasy_Base_Metric_0to100 <- build_weighted_metric(
   rb_metric_df,
   c(
-    RB_History_Metric_0to100 = 0.14,
-    RB_Rush_Volume_Metric_0to100 = 0.16,
-    RB_Rush_Efficiency_Metric_0to100 = 0.10,
-    RB_Explosive_Metric_0to100 = 0.12,
-    RB_Receiving_Metric_0to100 = 0.24,
-    RB_TD_Metric_0to100 = 0.16,
-    RB_Team_Context_Metric_0to100 = 0.08
+    RB_Prior_Production_Metric_0to100 = 0.18,
+    RB_Opportunity_Metric_0to100 = 0.26,
+    RB_Rush_Efficiency_Metric_0to100 = 0.16,
+    RB_Explosive_Metric_0to100 = 0.10,
+    RB_Receiving_Metric_0to100 = 0.10,
+    RB_TD_Context_Metric_0to100 = 0.20
   )
 )
 
@@ -24612,170 +24768,26 @@ rb_metric_df$RB_Fantasy_Base_Grade <- grade_from_score(
   rb_metric_df$RB_Fantasy_Base_Metric_0to100
 )
 
-# -------------------------------------------------------------------
-# 5) RB matchup scoring
-# -------------------------------------------------------------------
-
-rb_matchup_positive_numeric <- intersect(
-  c(
-    "avg_total_CAR_def",
-    "avg_total_YDS_rush_def",
-    "avg_total_RuYDS_G_def",
-    "avg_total_YPC_def",
-    "avg_total_TD_rush_def",
-    "avg_total_TD_rush_PCT_def",
-    "avg_total_X1D_rush_def",
-    "avg_total_X1D_rush_PCT_def",
-    "avg_total_YBCO_CAR_def",
-    "avg_total_BACK_TGT_RATE_def",
-    "avg_total_TGT_G_def",
-    "avg_total_TGT_PCT_def",
-    "avg_total_TM_RecYDS_PCT_def",
-    "avg_total_YDS_def",
-    "avg_total_RecYDS_G_def",
-    "avg_total_RecXFP_def",
-    "avg_total_RTE_PCT_def",
-    "avg_total_X1READ_PCT_def",
-    "avg_total_RATE_def",
-    "avg_total_total_plys_def",
-    "avg_total_RZ_opp_Allw",
-    "avg_total_RZ_Pass_Run",
-    "avg_total_PTs_allw"
-  ),
-  names(rb_metric_df)
-)
-
-rb_matchup_inverse_numeric <- intersect(
-  c("avg_total_FUM_def"),
-  names(rb_metric_df)
-)
-
-rb_matchup_role_features <- intersect(
-  c(
-    "HC_Plays_Allw_Role_avg",
-    "HC_GapvsZone_Role_avg",
-    "HC_BACK_TGT_DEF_Role_avg",
-    "Team_Dline_Run_Role_avg",
-    "Team_RZ_DEF_Role_avg",
-    "Team_RZ_Pass_Run_DEF_Role_avg",
-    "Team_PTs_allw_Role_avg"
-  ),
-  names(rb_metric_df)
-)
-
-for (col in rb_matchup_positive_numeric) {
-  rb_metric_df[[paste0("matchup_score_", col)]] <- pct_score(rb_metric_df[[col]], inverse = FALSE)
-}
-
-for (col in rb_matchup_inverse_numeric) {
-  rb_metric_df[[paste0("matchup_score_", col)]] <- pct_score(rb_metric_df[[col]], inverse = TRUE)
-}
-
-for (col in rb_matchup_role_features) {
-  rb_metric_df[[paste0("matchup_score_", col)]] <- role_score_from_target(rb_metric_df[[col]], rb_metric_df$fantasyPts_week)
-}
-
-rb_metric_df$RB_Matchup_Rush_Ease_Metric_0to100 <- build_group_score(
-  rb_metric_df,
-  c(
-    "matchup_score_avg_total_CAR_def",
-    "matchup_score_avg_total_YDS_rush_def",
-    "matchup_score_avg_total_RuYDS_G_def",
-    "matchup_score_avg_total_YPC_def",
-    "matchup_score_avg_total_TD_rush_def",
-    "matchup_score_avg_total_TD_rush_PCT_def",
-    "matchup_score_avg_total_X1D_rush_def",
-    "matchup_score_avg_total_X1D_rush_PCT_def",
-    "matchup_score_avg_total_YBCO_CAR_def",
-    "matchup_score_HC_GapvsZone_Role_avg",
-    "matchup_score_Team_Dline_Run_Role_avg"
-  ),
-  "fantasyPts_week"
-)
-
-rb_metric_df$RB_Matchup_Receiving_Metric_0to100 <- build_group_score(
-  rb_metric_df,
-  c(
-    "matchup_score_avg_total_BACK_TGT_RATE_def",
-    "matchup_score_avg_total_TGT_G_def",
-    "matchup_score_avg_total_TGT_PCT_def",
-    "matchup_score_avg_total_TM_RecYDS_PCT_def",
-    "matchup_score_avg_total_YDS_def",
-    "matchup_score_avg_total_RecYDS_G_def",
-    "matchup_score_avg_total_RecXFP_def",
-    "matchup_score_avg_total_RTE_PCT_def",
-    "matchup_score_avg_total_X1READ_PCT_def",
-    "matchup_score_avg_total_RATE_def",
-    "matchup_score_HC_BACK_TGT_DEF_Role_avg"
-  ),
-  "fantasyPts_week"
-)
-
-rb_metric_df$RB_Matchup_Game_Script_Metric_0to100 <- build_group_score(
-  rb_metric_df,
-  c(
-    "matchup_score_avg_total_total_plys_def",
-    "matchup_score_avg_total_RZ_opp_Allw",
-    "matchup_score_avg_total_RZ_Pass_Run",
-    "matchup_score_avg_total_PTs_allw",
-    "matchup_score_HC_Plays_Allw_Role_avg",
-    "matchup_score_Team_RZ_DEF_Role_avg",
-    "matchup_score_Team_RZ_Pass_Run_DEF_Role_avg",
-    "matchup_score_Team_PTs_allw_Role_avg"
-  ),
-  "fantasyPts_week"
-)
-
-rb_metric_df$RB_Matchup_Metric_0to100 <- build_weighted_metric(
-  rb_metric_df,
-  c(
-    RB_Matchup_Game_Script_Metric_0to100 = 0.45,
-    RB_Matchup_Rush_Ease_Metric_0to100 = 0.30,
-    RB_Matchup_Receiving_Metric_0to100 = 0.25
-  )
-)
-
-rb_metric_df$RB_Matchup_Grade <- grade_from_score(
-  rb_metric_df$RB_Matchup_Metric_0to100
-)
-
-# -------------------------------------------------------------------
-# 6) Official veteran RB fantasy metric with matchup
-# -------------------------------------------------------------------
-
-rb_metric_df$RB_Fantasy_Final_Metric_0to100 <- build_weighted_metric(
-  rb_metric_df,
-  c(
-    RB_Fantasy_Base_Metric_0to100 = 0.80,
-    RB_Matchup_Metric_0to100 = 0.20
-  )
-)
-
+rb_metric_df$RB_Fantasy_Final_Metric_0to100 <- rb_metric_df$RB_Fantasy_Base_Metric_0to100
 rb_metric_df$RB_Fantasy_Final_Grade <- grade_from_score(
   rb_metric_df$RB_Fantasy_Final_Metric_0to100
 )
 
 # -------------------------------------------------------------------
-# 7) Store final RB veteran columns on rb_sch_21_avg
+# 5) Store final veteran RB columns on rb_sch_21_avg
 # -------------------------------------------------------------------
 
 rb_cols_to_store <- c(
-  "RB_History_Metric_0to100",
-  "RB_Rush_Volume_Metric_0to100",
+  "RB_Prior_Production_Metric_0to100",
+  "RB_Opportunity_Metric_0to100",
   "RB_Rush_Efficiency_Metric_0to100",
   "RB_Explosive_Metric_0to100",
   "RB_Receiving_Metric_0to100",
-  "RB_TD_Metric_0to100",
+  "RB_TD_Context_Metric_0to100",
   "RB_Team_Context_Metric_0to100",
   "RB_Risk_Metric_0to100",
-  "RB_Workload_Metric_0to100",
   "RB_Fantasy_Base_Metric_0to100",
   "RB_Fantasy_Base_Grade",
-  "RB_Matchup_Rush_Ease_Metric_0to100",
-  "RB_Matchup_Receiving_Metric_0to100",
-  "RB_Matchup_Game_Script_Metric_0to100",
-  "RB_Matchup_Metric_0to100",
-  "RB_Matchup_Grade",
   "RB_Fantasy_Final_Metric_0to100",
   "RB_Fantasy_Final_Grade"
 )
@@ -24791,38 +24803,37 @@ rb_sch_21_avg <- rb_sch_21_avg %>%
   )
 
 # -------------------------------------------------------------------
-# 8) Optional review table
+# 6) Optional review table
 # -------------------------------------------------------------------
 
 rb_metric_summary_final <- rb_metric_df %>%
   dplyr::select(
-    Player, TM, WK, fantasyPts_week,
-    dplyr::any_of(c(
-      "Opp_week",
-      "Scrm_YDs_week",
-      "Tot_TDs_week",
-      "CAR_week",
-      "TGT_G_week",
-      "RB_History_Metric_0to100",
-      "RB_Rush_Volume_Metric_0to100",
-      "RB_Rush_Efficiency_Metric_0to100",
-      "RB_Explosive_Metric_0to100",
-      "RB_Receiving_Metric_0to100",
-      "RB_TD_Metric_0to100",
-      "RB_Team_Context_Metric_0to100",
-      "RB_Risk_Metric_0to100",
-      "RB_Workload_Metric_0to100",
-      "RB_Fantasy_Base_Metric_0to100",
-      "RB_Matchup_Metric_0to100",
-      "RB_Fantasy_Final_Metric_0to100",
-      "RB_Fantasy_Final_Grade"
-    ))
+    Player, TM, WK,
+    fantasyPts_week,
+    RB_Box_Fantasy_Target,
+    Opp_week,
+    CAR_week,
+    TGT_G_week,
+    Scrm_YDs_week,
+    Tot_TDs_week,
+    RB_Prior_Production_Metric_0to100,
+    RB_Opportunity_Metric_0to100,
+    RB_Rush_Efficiency_Metric_0to100,
+    RB_Explosive_Metric_0to100,
+    RB_Receiving_Metric_0to100,
+    RB_TD_Context_Metric_0to100,
+    RB_Team_Context_Metric_0to100,
+    RB_Fantasy_Base_Metric_0to100,
+    RB_Fantasy_Final_Metric_0to100,
+    RB_Fantasy_Final_Grade
   ) %>%
   dplyr::arrange(WK, dplyr::desc(RB_Fantasy_Final_Metric_0to100))
 
 # -------------------- RB final rookie metric block --------------------
 # Main output table: rb_sch_21_avg
 # Rookie filter: SEA == rookie_year
+# Context was the strongest rookie RB driver.
+# Official composite uses the v2c blend to keep draft signal in the score.
 
 # -------------------------------------------------------------------
 # 1) Build rookie eval table
@@ -24844,17 +24855,21 @@ rb_rookie_targets_21 <- rb_sch_21 %>%
   dplyr::arrange(Player, TM, WK, dplyr::desc(fantasyPts)) %>%
   dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
   dplyr::select(
-    Player, TM, WK, fantasyPts,
+    Player, TM, WK,
     dplyr::any_of(c(
+      "fantasyPts",
       "Opp",
-      "Scrm_YDs",
-      "Tot_TDs",
+      "OPP",
       "CAR",
-      "RuYDS_G",
-      "TD_rush",
       "TGT_G",
+      "YDS_rush",
+      "RuYDS_G",
       "YDS",
       "RecYDS_G",
+      "TD_rush",
+      "TD",
+      "Scrm_YDs",
+      "Tot_TDs",
       "FUM"
     ))
   ) %>%
@@ -24878,8 +24893,26 @@ rb_rookie_df <- rb_sch_21_avg %>%
   ) %>%
   dplyr::arrange(Player, TM, WK) %>%
   dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
-  dplyr::left_join(rb_rookie_targets_21, by = c("Player", "TM", "WK")) %>%
-  dplyr::filter(!is.na(fantasyPts_week))
+  dplyr::left_join(rb_rookie_targets_21, by = c("Player", "TM", "WK"))
+
+rb_rookie_df$Opp_week <- pick_first_existing(rb_rookie_df, c("Opp_week", "OPP_week"))
+rb_rookie_df$rush_yds_week <- pick_first_existing(rb_rookie_df, c("YDS_rush_week", "RuYDS_G_week"))
+rb_rookie_df$rec_yds_week <- pick_first_existing(rb_rookie_df, c("YDS_week", "RecYDS_G_week"))
+rb_rookie_df$td_rush_week <- pick_first_existing(rb_rookie_df, c("TD_rush_week"))
+rb_rookie_df$td_rec_week <- pick_first_existing(rb_rookie_df, c("TD_week"))
+
+rb_rookie_df <- rb_rookie_df %>%
+  dplyr::mutate(
+    Scrm_YDs_week = dplyr::coalesce(Scrm_YDs_week, rush_yds_week + rec_yds_week),
+    Tot_TDs_week = dplyr::coalesce(Tot_TDs_week, dplyr::coalesce(td_rush_week, 0) + dplyr::coalesce(td_rec_week, 0)),
+    RB_Box_Fantasy_Target =
+      dplyr::coalesce(rush_yds_week, 0) * 0.10 +
+      dplyr::coalesce(rec_yds_week, 0) * 0.10 +
+      6 * dplyr::coalesce(td_rush_week, 0) +
+      6 * dplyr::coalesce(td_rec_week, 0),
+    RB_Rookie_Fantasy_Target = dplyr::coalesce(fantasyPts_week, RB_Box_Fantasy_Target)
+  ) %>%
+  dplyr::filter(!is.na(RB_Rookie_Fantasy_Target))
 
 # -------------------------------------------------------------------
 # 2) Score rookie RB inputs
@@ -24887,6 +24920,8 @@ rb_rookie_df <- rb_sch_21_avg %>%
 
 rb_rookie_positive_numeric_features <- intersect(
   c(
+    "Ht",
+    "Wt",
     "bench",
     "vertical",
     "broad_jump"
@@ -24896,6 +24931,7 @@ rb_rookie_positive_numeric_features <- intersect(
 
 rb_rookie_inverse_numeric_features <- intersect(
   c(
+    "age",
     "round",
     "pick",
     "forty",
@@ -24931,26 +24967,38 @@ for (col in rb_rookie_inverse_numeric_features) {
 }
 
 for (col in rb_rookie_role_features) {
-  rb_rookie_df[[paste0("score_", col)]] <- role_score_from_target(rb_rookie_df[[col]], rb_rookie_df$fantasyPts_week)
+  rb_rookie_df[[paste0("score_", col)]] <- role_score_from_target(
+    rb_rookie_df[[col]],
+    rb_rookie_df$RB_Rookie_Fantasy_Target
+  )
+}
+
+rb_rookie_build_group_score <- function(df, cols, target_col) {
+  cols <- intersect(cols, names(df))
+  if (length(cols) == 0) return(rep(NA_real_, nrow(df)))
+  build_group_score(df, cols, target_col)
 }
 
 # -------------------------------------------------------------------
 # 3) Rookie RB sub-metrics
 # -------------------------------------------------------------------
 
-rb_rookie_df$RB_Rookie_Draft_Metric_0to100 <- build_group_score(
+rb_rookie_df$RB_Rookie_Draft_Metric_0to100 <- rb_rookie_build_group_score(
   rb_rookie_df,
   c(
     "score_Draft_Day",
+    "score_age",
     "score_round",
     "score_pick"
   ),
-  "fantasyPts_week"
+  "RB_Rookie_Fantasy_Target"
 )
 
-rb_rookie_df$RB_Rookie_Athleticism_Metric_0to100 <- build_group_score(
+rb_rookie_df$RB_Rookie_Athleticism_Metric_0to100 <- rb_rookie_build_group_score(
   rb_rookie_df,
   c(
+    "score_Ht",
+    "score_Wt",
     "score_forty",
     "score_bench",
     "score_vertical",
@@ -24964,10 +25012,10 @@ rb_rookie_df$RB_Rookie_Athleticism_Metric_0to100 <- build_group_score(
     "score_RB_cone_Role",
     "score_RB_shuttle_Role"
   ),
-  "fantasyPts_week"
+  "RB_Rookie_Fantasy_Target"
 )
 
-rb_rookie_df$RB_Rookie_Role_Readiness_Metric_0to100 <- build_group_score(
+rb_rookie_df$RB_Rookie_Role_Readiness_Metric_0to100 <- rb_rookie_build_group_score(
   rb_rookie_df,
   c(
     "score_RB_Depth_Role",
@@ -24975,29 +25023,29 @@ rb_rookie_df$RB_Rookie_Role_Readiness_Metric_0to100 <- build_group_score(
     "score_report_status",
     "score_practice_status"
   ),
-  "fantasyPts_week"
+  "RB_Rookie_Fantasy_Target"
 )
 
-rb_rookie_df$RB_Rookie_Context_Metric_0to100 <- build_weighted_metric(
+rb_rookie_df$RB_Rookie_Context_Metric_0to100 <- rb_rookie_build_weighted_metric(
   rb_rookie_df,
   c(
-    RB_Team_Context_Metric_0to100 = 0.55,
-    RB_Matchup_Metric_0to100 = 0.45
+    RB_Opportunity_Metric_0to100 = 0.70,
+    RB_TD_Context_Metric_0to100 = 0.30
   )
 )
 
 # -------------------------------------------------------------------
 # 4) Official rookie RB fantasy metric
-# v2c winner: best balance of fantasy + usage signal
+# v2c winner among composite blends
 # -------------------------------------------------------------------
 
 rb_rookie_df$RB_Rookie_Final_Metric_0to100 <- build_weighted_metric(
   rb_rookie_df,
   c(
-    RB_Rookie_Draft_Metric_0to100 = 0.45,
-    RB_Rookie_Athleticism_Metric_0to100 = 0.35,
-    RB_Rookie_Role_Readiness_Metric_0to100 = 0.05,
-    RB_Rookie_Context_Metric_0to100 = 0.15
+    RB_Rookie_Context_Metric_0to100 = 0.50,
+    RB_Rookie_Draft_Metric_0to100 = 0.35,
+    RB_Rookie_Athleticism_Metric_0to100 = 0.10,
+    RB_Rookie_Role_Readiness_Metric_0to100 = 0.05
   )
 )
 
@@ -25034,26 +25082,1002 @@ rb_sch_21_avg <- rb_sch_21_avg %>%
 
 rb_rookie_summary_final <- rb_rookie_df %>%
   dplyr::select(
-    Player, TM, WK, fantasyPts_week,
-    dplyr::any_of(c(
-      "round",
-      "pick",
-      "Draft_Day",
-      "RB_Depth_Role",
-      "Opp_week",
-      "Scrm_YDs_week",
-      "Tot_TDs_week",
-      "CAR_week",
-      "TGT_G_week",
-      "RB_Rookie_Draft_Metric_0to100",
-      "RB_Rookie_Athleticism_Metric_0to100",
-      "RB_Rookie_Role_Readiness_Metric_0to100",
-      "RB_Rookie_Context_Metric_0to100",
-      "RB_Rookie_Final_Metric_0to100",
-      "RB_Rookie_Final_Grade"
-    ))
+    Player, TM, WK,
+    RB_Rookie_Fantasy_Target,
+    RB_Box_Fantasy_Target,
+    round,
+    pick,
+    Draft_Day,
+    age,
+    RB_Depth_Role,
+    Opp_week,
+    CAR_week,
+    TGT_G_week,
+    Scrm_YDs_week,
+    Tot_TDs_week,
+    RB_Rookie_Draft_Metric_0to100,
+    RB_Rookie_Athleticism_Metric_0to100,
+    RB_Rookie_Role_Readiness_Metric_0to100,
+    RB_Rookie_Context_Metric_0to100,
+    RB_Rookie_Final_Metric_0to100,
+    RB_Rookie_Final_Grade
   ) %>%
   dplyr::arrange(WK, dplyr::desc(RB_Rookie_Final_Metric_0to100))
+
+# -------------------- RB final eval block --------------------
+# Uses fixed RB fantasy points and the locked veteran/rookie RB paths.
+
+# -------------------------------------------------------------------
+# 1) Helper functions
+# -------------------------------------------------------------------
+
+if (!exists("rmse")) {
+  rmse <- function(actual, predicted) {
+    sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+  }
+}
+
+if (!exists("mae")) {
+  mae <- function(actual, predicted) {
+    mean(abs(actual - predicted), na.rm = TRUE)
+  }
+}
+
+if (!exists("rsq")) {
+  rsq <- function(actual, predicted) {
+    1 - sum((actual - predicted)^2, na.rm = TRUE) /
+      sum((actual - mean(actual, na.rm = TRUE))^2, na.rm = TRUE)
+  }
+}
+
+if (!exists("safe_cor")) {
+  safe_cor <- function(x, y) {
+    x <- suppressWarnings(as.numeric(x))
+    y <- suppressWarnings(as.numeric(y))
+    
+    if (all(is.na(x)) || all(is.na(y))) return(NA_real_)
+    if (sd(x, na.rm = TRUE) == 0 || sd(y, na.rm = TRUE) == 0) return(NA_real_)
+    
+    cor(x, y, use = "pairwise.complete.obs")
+  }
+}
+
+if (!exists("calc_vif_table")) {
+  calc_vif_table <- function(df, features) {
+    features <- features[features %in% names(df)]
+    
+    if (length(features) <= 1) {
+      return(tibble::tibble(feature = features, vif = 1))
+    }
+    
+    d <- df[, features, drop = FALSE]
+    d <- d[stats::complete.cases(d), , drop = FALSE]
+    
+    if (nrow(d) < 10) {
+      return(tibble::tibble(feature = features, vif = NA_real_))
+    }
+    
+    vif_vals <- sapply(features, function(f) {
+      others <- setdiff(features, f)
+      
+      if (length(others) == 0) return(1)
+      
+      fit <- stats::lm(
+        stats::as.formula(paste(f, "~", paste(others, collapse = " + "))),
+        data = d
+      )
+      
+      r2 <- summary(fit)$r.squared
+      if (is.na(r2) || r2 >= 0.9999) return(Inf)
+      
+      1 / (1 - r2)
+    })
+    
+    tibble::tibble(
+      feature = names(vif_vals),
+      vif = as.numeric(vif_vals)
+    )
+  }
+}
+
+if (!exists("fit_target_model")) {
+  fit_target_model <- function(train_df, test_df, full_df, target, features, clip_zero = TRUE) {
+    features <- features[features %in% names(train_df)]
+    
+    if (!(target %in% names(train_df)) || length(features) == 0) {
+      return(NULL)
+    }
+    
+    train_use <- train_df %>%
+      dplyr::select(dplyr::all_of(c(target, features))) %>%
+      dplyr::filter(stats::complete.cases(.))
+    
+    test_use <- test_df %>%
+      dplyr::select(dplyr::all_of(c(target, features))) %>%
+      dplyr::filter(stats::complete.cases(.))
+    
+    if (nrow(train_use) < 20 || nrow(test_use) < 5) {
+      return(NULL)
+    }
+    
+    model_formula <- stats::as.formula(
+      paste(target, "~", paste(features, collapse = " + "))
+    )
+    
+    fit <- stats::lm(model_formula, data = train_use)
+    
+    pred_test <- stats::predict(fit, newdata = test_use)
+    pred_full <- stats::predict(fit, newdata = full_df)
+    
+    if (clip_zero) {
+      pred_test <- ifelse(is.na(pred_test), NA_real_, pmax(0, pred_test))
+      pred_full <- ifelse(is.na(pred_full), NA_real_, pmax(0, pred_full))
+    }
+    
+    metrics <- tibble::tibble(
+      target = target,
+      features = paste(features, collapse = " + "),
+      n_train = nrow(train_use),
+      n_test = nrow(test_use),
+      rmse = rmse(test_use[[target]], pred_test),
+      mae = mae(test_use[[target]], pred_test),
+      r2 = rsq(test_use[[target]], pred_test),
+      correlation = safe_cor(test_use[[target]], pred_test)
+    )
+    
+    vif_tbl <- calc_vif_table(train_use, features) %>%
+      dplyr::mutate(target = target)
+    
+    list(
+      fit = fit,
+      pred_full = pred_full,
+      metrics = metrics,
+      vif = vif_tbl
+    )
+  }
+}
+
+# -------------------------------------------------------------------
+# 2) Build eval source
+# -------------------------------------------------------------------
+
+rb_projection_eval <- rb_sch_21 %>%
+  dplyr::mutate(
+    WK = suppressWarnings(as.integer(WK)),
+    SEA_num = suppressWarnings(as.integer(as.character(SEA))),
+    rookie_year_num = suppressWarnings(as.integer(as.character(rookie_year)))
+  ) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM, WK, dplyr::desc(fantasyPts)) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::select(
+    Player, TM, WK, SEA_num, rookie_year_num,
+    dplyr::any_of(c(
+      "fantasyPts",
+      "Opp",
+      "OPP",
+      "CAR",
+      "TGT_G",
+      "YDS_rush",
+      "RuYDS_G",
+      "YDS",
+      "RecYDS_G",
+      "TD_rush",
+      "TD",
+      "Scrm_YDs",
+      "Tot_TDs"
+    ))
+  ) %>%
+  dplyr::left_join(
+    rb_sch_21_avg %>%
+      dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+      dplyr::arrange(Player, TM, WK) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+      dplyr::select(
+        Player, TM, WK,
+        dplyr::any_of(c(
+          "RB_Prior_Production_Metric_0to100",
+          "RB_Opportunity_Metric_0to100",
+          "RB_Rush_Efficiency_Metric_0to100",
+          "RB_Explosive_Metric_0to100",
+          "RB_Receiving_Metric_0to100",
+          "RB_TD_Context_Metric_0to100",
+          "RB_Team_Context_Metric_0to100",
+          "RB_Fantasy_Base_Metric_0to100",
+          "RB_Fantasy_Final_Metric_0to100",
+          "RB_Rookie_Draft_Metric_0to100",
+          "RB_Rookie_Athleticism_Metric_0to100",
+          "RB_Rookie_Role_Readiness_Metric_0to100",
+          "RB_Rookie_Context_Metric_0to100",
+          "RB_Rookie_Final_Metric_0to100"
+        ))
+      ),
+    by = c("Player", "TM", "WK")
+  ) %>%
+  {
+    df <- .
+    
+    df$Opp <- pick_first_existing(df, c("Opp", "OPP"))
+    df$rush_yds <- pick_first_existing(df, c("YDS_rush", "RuYDS_G"))
+    df$rec_yds <- pick_first_existing(df, c("YDS", "RecYDS_G"))
+    df$td_rush_calc <- pick_first_existing(df, c("TD_rush"))
+    df$td_rec_calc <- pick_first_existing(df, c("TD"))
+    
+    df %>%
+      dplyr::mutate(
+        Scrm_YDs = dplyr::coalesce(Scrm_YDs, rush_yds + rec_yds),
+        Tot_TDs = dplyr::coalesce(Tot_TDs, dplyr::coalesce(td_rush_calc, 0) + dplyr::coalesce(td_rec_calc, 0)),
+        RB_Box_Fantasy_Target =
+          dplyr::coalesce(rush_yds, 0) * 0.10 +
+          dplyr::coalesce(rec_yds, 0) * 0.10 +
+          6 * dplyr::coalesce(td_rush_calc, 0) +
+          6 * dplyr::coalesce(td_rec_calc, 0),
+        RB_Fantasy_Target = dplyr::coalesce(fantasyPts, RB_Box_Fantasy_Target),
+        is_rookie = !is.na(SEA_num) & !is.na(rookie_year_num) & SEA_num == rookie_year_num
+      )
+  }
+
+# -------------------------------------------------------------------
+# 3) Build unified profile metrics
+# -------------------------------------------------------------------
+
+rb_projection_eval$RB_Rookie_Opportunity_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Rookie_Context_Metric_0to100 = 0.80,
+    RB_Rookie_Draft_Metric_0to100 = 0.20
+  )
+)
+
+rb_projection_eval$RB_Rookie_Yardage_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Rookie_Context_Metric_0to100 = 0.55,
+    RB_Rookie_Draft_Metric_0to100 = 0.25,
+    RB_Rookie_Athleticism_Metric_0to100 = 0.20
+  )
+)
+
+rb_projection_eval$RB_Rookie_Receiving_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Rookie_Context_Metric_0to100 = 0.60,
+    RB_Rookie_Draft_Metric_0to100 = 0.25,
+    RB_Rookie_Role_Readiness_Metric_0to100 = 0.15
+  )
+)
+
+rb_projection_eval$RB_Rookie_TD_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Rookie_Context_Metric_0to100 = 0.75,
+    RB_Rookie_Draft_Metric_0to100 = 0.25
+  )
+)
+
+rb_projection_eval$RB_Veteran_Yardage_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Opportunity_Metric_0to100 = 0.45,
+    RB_Rush_Efficiency_Metric_0to100 = 0.35,
+    RB_Explosive_Metric_0to100 = 0.20
+  )
+)
+
+rb_projection_eval$RB_Veteran_Receiving_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Opportunity_Metric_0to100 = 0.35,
+    RB_Receiving_Metric_0to100 = 0.65
+  )
+)
+
+rb_projection_eval <- rb_projection_eval %>%
+  dplyr::mutate(
+    RB_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(RB_Rookie_Final_Metric_0to100),
+      RB_Rookie_Final_Metric_0to100,
+      RB_Fantasy_Final_Metric_0to100
+    ),
+    RB_Opportunity_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(RB_Rookie_Opportunity_Profile_Metric_0to100),
+      RB_Rookie_Opportunity_Profile_Metric_0to100,
+      RB_Opportunity_Metric_0to100
+    ),
+    RB_Yardage_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(RB_Rookie_Yardage_Profile_Metric_0to100),
+      RB_Rookie_Yardage_Profile_Metric_0to100,
+      RB_Veteran_Yardage_Profile_Metric_0to100
+    ),
+    RB_Receiving_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(RB_Rookie_Receiving_Profile_Metric_0to100),
+      RB_Rookie_Receiving_Profile_Metric_0to100,
+      RB_Veteran_Receiving_Profile_Metric_0to100
+    ),
+    RB_TD_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(RB_Rookie_TD_Profile_Metric_0to100),
+      RB_Rookie_TD_Profile_Metric_0to100,
+      RB_TD_Context_Metric_0to100
+    )
+  )
+
+# -------------------------------------------------------------------
+# 4) Train / test split
+# -------------------------------------------------------------------
+
+rb_train_projection <- rb_projection_eval %>% dplyr::filter(WK <= 14)
+rb_test_projection  <- rb_projection_eval %>% dplyr::filter(WK > 14)
+
+# -------------------------------------------------------------------
+# 5) Target models
+# -------------------------------------------------------------------
+
+rb_model_Opp <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "Opp",
+  features = c("RB_Opportunity_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+rb_model_CAR <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "CAR",
+  features = c("RB_Opportunity_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+rb_model_TGT_G <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "TGT_G",
+  features = c("RB_Receiving_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+rb_model_Scrm_YDs <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "Scrm_YDs",
+  features = c(
+    "RB_Opportunity_Profile_Metric_0to100",
+    "RB_Yardage_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+rb_model_Tot_TDs <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "Tot_TDs",
+  features = c("RB_TD_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+rb_model_fantasy_direct <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "RB_Fantasy_Target",
+  features = c("RB_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+rb_projection_models <- list(
+  Opp = rb_model_Opp,
+  CAR = rb_model_CAR,
+  TGT_G = rb_model_TGT_G,
+  Scrm_YDs = rb_model_Scrm_YDs,
+  Tot_TDs = rb_model_Tot_TDs,
+  RB_Fantasy_Target = rb_model_fantasy_direct
+)
+
+rb_projection_model_metrics <- dplyr::bind_rows(
+  lapply(rb_projection_models, function(x) if (!is.null(x)) x$metrics)
+) %>%
+  dplyr::arrange(target)
+
+rb_projection_model_vif <- dplyr::bind_rows(
+  lapply(rb_projection_models, function(x) if (!is.null(x)) x$vif)
+) %>%
+  dplyr::arrange(target, dplyr::desc(vif))
+
+# -------------------------------------------------------------------
+# 6) Full-table predictions
+# -------------------------------------------------------------------
+
+if (!is.null(rb_model_Opp)) {
+  rb_projection_eval$RB_Proj_Opp <- rb_model_Opp$pred_full
+}
+
+if (!is.null(rb_model_CAR)) {
+  rb_projection_eval$RB_Proj_CAR <- rb_model_CAR$pred_full
+}
+
+if (!is.null(rb_model_TGT_G)) {
+  rb_projection_eval$RB_Proj_TGT_G <- rb_model_TGT_G$pred_full
+}
+
+if (!is.null(rb_model_Scrm_YDs)) {
+  rb_projection_eval$RB_Proj_Scrm_YDs <- rb_model_Scrm_YDs$pred_full
+}
+
+if (!is.null(rb_model_Tot_TDs)) {
+  rb_projection_eval$RB_Proj_TotTDs <- rb_model_Tot_TDs$pred_full
+}
+
+if (!is.null(rb_model_fantasy_direct)) {
+  rb_projection_eval$RB_Proj_FantasyPts <- rb_model_fantasy_direct$pred_full
+}
+
+rb_fantasy_projection_comparison <- if (!is.null(rb_model_fantasy_direct)) {
+  rb_model_fantasy_direct$metrics %>%
+    dplyr::mutate(model_name = "direct_profile") %>%
+    dplyr::select(target, model_name, features, n_train, n_test, rmse, mae, r2, correlation)
+} else {
+  tibble::tibble()
+}
+
+# -------------------------------------------------------------------
+# 7) Eval screens
+# -------------------------------------------------------------------
+
+rb_projection_metric_cols <- c(
+  "RB_Profile_Metric_0to100",
+  "RB_Opportunity_Profile_Metric_0to100",
+  "RB_Yardage_Profile_Metric_0to100",
+  "RB_Receiving_Profile_Metric_0to100",
+  "RB_TD_Profile_Metric_0to100",
+  "RB_Prior_Production_Metric_0to100",
+  "RB_Opportunity_Metric_0to100",
+  "RB_Rush_Efficiency_Metric_0to100",
+  "RB_Explosive_Metric_0to100",
+  "RB_Receiving_Metric_0to100",
+  "RB_TD_Context_Metric_0to100",
+  "RB_Team_Context_Metric_0to100"
+)
+
+rb_projection_metric_cols <- rb_projection_metric_cols[rb_projection_metric_cols %in% names(rb_projection_eval)]
+
+rb_projection_target_screen <- tibble::tibble(
+  metric = rb_projection_metric_cols,
+  cor_to_fantasyPts = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$RB_Fantasy_Target)),
+  cor_to_box_fantasy = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$RB_Box_Fantasy_Target)),
+  cor_to_opp = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$Opp)),
+  cor_to_car = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$CAR)),
+  cor_to_targets = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$TGT_G)),
+  cor_to_scrm_yds = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$Scrm_YDs)),
+  cor_to_tot_tds = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$Tot_TDs))
+) %>%
+  dplyr::arrange(dplyr::desc(cor_to_fantasyPts))
+
+rb_eval_split_summary <- tibble::tibble(
+  cohort = c("all_rows", "rookies", "non_rookies"),
+  cor_profile_to_fantasy = c(
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100, rb_projection_eval$RB_Fantasy_Target),
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100[rb_projection_eval$is_rookie], rb_projection_eval$RB_Fantasy_Target[rb_projection_eval$is_rookie]),
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100[!rb_projection_eval$is_rookie], rb_projection_eval$RB_Fantasy_Target[!rb_projection_eval$is_rookie])
+  ),
+  cor_profile_to_box = c(
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100, rb_projection_eval$RB_Box_Fantasy_Target),
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100[rb_projection_eval$is_rookie], rb_projection_eval$RB_Box_Fantasy_Target[rb_projection_eval$is_rookie]),
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100[!rb_projection_eval$is_rookie], rb_projection_eval$RB_Box_Fantasy_Target[!rb_projection_eval$is_rookie])
+  )
+)
+
+# -------------------------------------------------------------------
+# 8) Review table
+# -------------------------------------------------------------------
+
+rb_projection_summary_final <- rb_projection_eval %>%
+  dplyr::select(
+    Player, TM, WK, is_rookie,
+    RB_Fantasy_Target,
+    RB_Box_Fantasy_Target,
+    Opp,
+    CAR,
+    TGT_G,
+    Scrm_YDs,
+    Tot_TDs,
+    RB_Profile_Metric_0to100,
+    RB_Proj_Opp,
+    RB_Proj_CAR,
+    RB_Proj_TGT_G,
+    RB_Proj_Scrm_YDs,
+    RB_Proj_TotTDs,
+    RB_Proj_FantasyPts
+  ) %>%
+  dplyr::arrange(WK, dplyr::desc(RB_Proj_FantasyPts))
+
+# -------------------- RB final eval block --------------------
+# Uses fixed RB fantasy points and the locked veteran/rookie RB paths.
+# Official RB fantasy eval uses the direct profile model.
+
+# -------------------------------------------------------------------
+# 1) Helper functions
+# -------------------------------------------------------------------
+
+if (!exists("pick_first_existing")) {
+  pick_first_existing <- function(df, cols) {
+    cols <- cols[cols %in% names(df)]
+    if (length(cols) == 0) return(rep(NA_real_, nrow(df)))
+    
+    out <- suppressWarnings(as.numeric(df[[cols[1]]]))
+    if (length(cols) > 1) {
+      for (col in cols[-1]) {
+        out <- dplyr::coalesce(out, suppressWarnings(as.numeric(df[[col]])))
+      }
+    }
+    out
+  }
+}
+
+if (!exists("rmse")) {
+  rmse <- function(actual, predicted) {
+    sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+  }
+}
+
+if (!exists("mae")) {
+  mae <- function(actual, predicted) {
+    mean(abs(actual - predicted), na.rm = TRUE)
+  }
+}
+
+if (!exists("rsq")) {
+  rsq <- function(actual, predicted) {
+    1 - sum((actual - predicted)^2, na.rm = TRUE) /
+      sum((actual - mean(actual, na.rm = TRUE))^2, na.rm = TRUE)
+  }
+}
+
+if (!exists("safe_cor")) {
+  safe_cor <- function(x, y) {
+    x <- suppressWarnings(as.numeric(x))
+    y <- suppressWarnings(as.numeric(y))
+    
+    if (all(is.na(x)) || all(is.na(y))) return(NA_real_)
+    if (sd(x, na.rm = TRUE) == 0 || sd(y, na.rm = TRUE) == 0) return(NA_real_)
+    
+    cor(x, y, use = "pairwise.complete.obs")
+  }
+}
+
+if (!exists("calc_vif_table")) {
+  calc_vif_table <- function(df, features) {
+    features <- features[features %in% names(df)]
+    
+    if (length(features) <= 1) {
+      return(tibble::tibble(feature = features, vif = 1))
+    }
+    
+    d <- df[, features, drop = FALSE]
+    d <- d[stats::complete.cases(d), , drop = FALSE]
+    
+    if (nrow(d) < 10) {
+      return(tibble::tibble(feature = features, vif = NA_real_))
+    }
+    
+    vif_vals <- sapply(features, function(f) {
+      others <- setdiff(features, f)
+      
+      if (length(others) == 0) return(1)
+      
+      fit <- stats::lm(
+        stats::as.formula(paste(f, "~", paste(others, collapse = " + "))),
+        data = d
+      )
+      
+      r2 <- summary(fit)$r.squared
+      if (is.na(r2) || r2 >= 0.9999) return(Inf)
+      
+      1 / (1 - r2)
+    })
+    
+    tibble::tibble(
+      feature = names(vif_vals),
+      vif = as.numeric(vif_vals)
+    )
+  }
+}
+
+if (!exists("fit_target_model")) {
+  fit_target_model <- function(train_df, test_df, full_df, target, features, clip_zero = TRUE) {
+    features <- features[features %in% names(train_df)]
+    
+    if (!(target %in% names(train_df)) || length(features) == 0) {
+      return(NULL)
+    }
+    
+    train_use <- train_df %>%
+      dplyr::select(dplyr::all_of(c(target, features))) %>%
+      dplyr::filter(stats::complete.cases(.))
+    
+    test_use <- test_df %>%
+      dplyr::select(dplyr::all_of(c(target, features))) %>%
+      dplyr::filter(stats::complete.cases(.))
+    
+    if (nrow(train_use) < 20 || nrow(test_use) < 5) {
+      return(NULL)
+    }
+    
+    model_formula <- stats::as.formula(
+      paste(target, "~", paste(features, collapse = " + "))
+    )
+    
+    fit <- stats::lm(model_formula, data = train_use)
+    
+    pred_test <- stats::predict(fit, newdata = test_use)
+    pred_full <- stats::predict(fit, newdata = full_df)
+    
+    if (clip_zero) {
+      pred_test <- ifelse(is.na(pred_test), NA_real_, pmax(0, pred_test))
+      pred_full <- ifelse(is.na(pred_full), NA_real_, pmax(0, pred_full))
+    }
+    
+    metrics <- tibble::tibble(
+      target = target,
+      features = paste(features, collapse = " + "),
+      n_train = nrow(train_use),
+      n_test = nrow(test_use),
+      rmse = rmse(test_use[[target]], pred_test),
+      mae = mae(test_use[[target]], pred_test),
+      r2 = rsq(test_use[[target]], pred_test),
+      correlation = safe_cor(test_use[[target]], pred_test)
+    )
+    
+    vif_tbl <- calc_vif_table(train_use, features) %>%
+      dplyr::mutate(target = target)
+    
+    list(
+      fit = fit,
+      pred_full = pred_full,
+      metrics = metrics,
+      vif = vif_tbl
+    )
+  }
+}
+
+# -------------------------------------------------------------------
+# 2) Build eval source
+# -------------------------------------------------------------------
+
+rb_projection_eval <- rb_sch_21 %>%
+  dplyr::mutate(
+    WK = suppressWarnings(as.integer(WK)),
+    SEA_num = suppressWarnings(as.integer(as.character(SEA))),
+    rookie_year_num = suppressWarnings(as.integer(as.character(rookie_year)))
+  ) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM, WK, dplyr::desc(fantasyPts)) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::select(
+    Player, TM, WK, SEA_num, rookie_year_num,
+    dplyr::any_of(c(
+      "fantasyPts",
+      "Opp",
+      "OPP",
+      "CAR",
+      "TGT_G",
+      "YDS_rush",
+      "RuYDS_G",
+      "YDS",
+      "RecYDS_G",
+      "TD_rush",
+      "TD",
+      "Scrm_YDs",
+      "Tot_TDs"
+    ))
+  ) %>%
+  dplyr::left_join(
+    rb_sch_21_avg %>%
+      dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+      dplyr::arrange(Player, TM, WK) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+      dplyr::select(
+        Player, TM, WK,
+        dplyr::any_of(c(
+          "RB_Prior_Production_Metric_0to100",
+          "RB_Opportunity_Metric_0to100",
+          "RB_Rush_Efficiency_Metric_0to100",
+          "RB_Explosive_Metric_0to100",
+          "RB_Receiving_Metric_0to100",
+          "RB_TD_Context_Metric_0to100",
+          "RB_Team_Context_Metric_0to100",
+          "RB_Fantasy_Base_Metric_0to100",
+          "RB_Fantasy_Final_Metric_0to100",
+          "RB_Rookie_Draft_Metric_0to100",
+          "RB_Rookie_Athleticism_Metric_0to100",
+          "RB_Rookie_Role_Readiness_Metric_0to100",
+          "RB_Rookie_Context_Metric_0to100",
+          "RB_Rookie_Final_Metric_0to100"
+        ))
+      ),
+    by = c("Player", "TM", "WK")
+  ) %>%
+  {
+    df <- .
+    
+    df$Opp <- pick_first_existing(df, c("Opp", "OPP"))
+    df$rush_yds <- pick_first_existing(df, c("YDS_rush", "RuYDS_G"))
+    df$rec_yds <- pick_first_existing(df, c("YDS", "RecYDS_G"))
+    df$td_rush_calc <- pick_first_existing(df, c("TD_rush"))
+    df$td_rec_calc <- pick_first_existing(df, c("TD"))
+    
+    df %>%
+      dplyr::mutate(
+        Scrm_YDs = dplyr::coalesce(Scrm_YDs, rush_yds + rec_yds),
+        Tot_TDs = dplyr::coalesce(Tot_TDs, dplyr::coalesce(td_rush_calc, 0) + dplyr::coalesce(td_rec_calc, 0)),
+        RB_Box_Fantasy_Target =
+          dplyr::coalesce(rush_yds, 0) * 0.10 +
+          dplyr::coalesce(rec_yds, 0) * 0.10 +
+          6 * dplyr::coalesce(td_rush_calc, 0) +
+          6 * dplyr::coalesce(td_rec_calc, 0),
+        RB_Fantasy_Target = dplyr::coalesce(fantasyPts, RB_Box_Fantasy_Target),
+        is_rookie = !is.na(SEA_num) & !is.na(rookie_year_num) & SEA_num == rookie_year_num
+      )
+  }
+
+# -------------------------------------------------------------------
+# 3) Build unified profile metrics
+# -------------------------------------------------------------------
+
+rb_projection_eval$RB_Rookie_Opportunity_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Rookie_Context_Metric_0to100 = 0.80,
+    RB_Rookie_Draft_Metric_0to100 = 0.20
+  )
+)
+
+rb_projection_eval$RB_Rookie_Yardage_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Rookie_Context_Metric_0to100 = 0.55,
+    RB_Rookie_Draft_Metric_0to100 = 0.25,
+    RB_Rookie_Athleticism_Metric_0to100 = 0.20
+  )
+)
+
+rb_projection_eval$RB_Rookie_Receiving_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Rookie_Context_Metric_0to100 = 0.60,
+    RB_Rookie_Draft_Metric_0to100 = 0.25,
+    RB_Rookie_Role_Readiness_Metric_0to100 = 0.15
+  )
+)
+
+rb_projection_eval$RB_Rookie_TD_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Rookie_Context_Metric_0to100 = 0.75,
+    RB_Rookie_Draft_Metric_0to100 = 0.25
+  )
+)
+
+rb_projection_eval$RB_Veteran_Yardage_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Opportunity_Metric_0to100 = 0.45,
+    RB_Rush_Efficiency_Metric_0to100 = 0.35,
+    RB_Explosive_Metric_0to100 = 0.20
+  )
+)
+
+rb_projection_eval$RB_Veteran_Receiving_Profile_Metric_0to100 <- build_weighted_metric(
+  rb_projection_eval,
+  c(
+    RB_Opportunity_Metric_0to100 = 0.35,
+    RB_Receiving_Metric_0to100 = 0.65
+  )
+)
+
+rb_projection_eval <- rb_projection_eval %>%
+  dplyr::mutate(
+    RB_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(RB_Rookie_Final_Metric_0to100),
+      RB_Rookie_Final_Metric_0to100,
+      RB_Fantasy_Final_Metric_0to100
+    ),
+    RB_Opportunity_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(RB_Rookie_Opportunity_Profile_Metric_0to100),
+      RB_Rookie_Opportunity_Profile_Metric_0to100,
+      RB_Opportunity_Metric_0to100
+    ),
+    RB_Yardage_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(RB_Rookie_Yardage_Profile_Metric_0to100),
+      RB_Rookie_Yardage_Profile_Metric_0to100,
+      RB_Veteran_Yardage_Profile_Metric_0to100
+    ),
+    RB_Receiving_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(RB_Rookie_Receiving_Profile_Metric_0to100),
+      RB_Rookie_Receiving_Profile_Metric_0to100,
+      RB_Veteran_Receiving_Profile_Metric_0to100
+    ),
+    RB_TD_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(RB_Rookie_TD_Profile_Metric_0to100),
+      RB_Rookie_TD_Profile_Metric_0to100,
+      RB_TD_Context_Metric_0to100
+    )
+  )
+
+# -------------------------------------------------------------------
+# 4) Train / test split
+# -------------------------------------------------------------------
+
+rb_train_projection <- rb_projection_eval %>% dplyr::filter(WK <= 14)
+rb_test_projection  <- rb_projection_eval %>% dplyr::filter(WK > 14)
+
+# -------------------------------------------------------------------
+# 5) Target models
+# -------------------------------------------------------------------
+
+rb_model_Opp <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "Opp",
+  features = c("RB_Opportunity_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+rb_model_CAR <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "CAR",
+  features = c("RB_Opportunity_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+rb_model_TGT_G <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "TGT_G",
+  features = c("RB_Receiving_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+rb_model_Scrm_YDs <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "Scrm_YDs",
+  features = c(
+    "RB_Opportunity_Profile_Metric_0to100",
+    "RB_Yardage_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+rb_model_Tot_TDs <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "Tot_TDs",
+  features = c("RB_TD_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+rb_model_fantasy_direct <- fit_target_model(
+  rb_train_projection, rb_test_projection, rb_projection_eval,
+  target = "RB_Fantasy_Target",
+  features = c("RB_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+rb_projection_models <- list(
+  Opp = rb_model_Opp,
+  CAR = rb_model_CAR,
+  TGT_G = rb_model_TGT_G,
+  Scrm_YDs = rb_model_Scrm_YDs,
+  Tot_TDs = rb_model_Tot_TDs,
+  RB_Fantasy_Target = rb_model_fantasy_direct
+)
+
+rb_projection_model_metrics <- dplyr::bind_rows(
+  lapply(rb_projection_models, function(x) if (!is.null(x)) x$metrics)
+) %>%
+  dplyr::arrange(target)
+
+rb_projection_model_vif <- dplyr::bind_rows(
+  lapply(rb_projection_models, function(x) if (!is.null(x)) x$vif)
+) %>%
+  dplyr::arrange(target, dplyr::desc(vif))
+
+# -------------------------------------------------------------------
+# 6) Full-table predictions
+# -------------------------------------------------------------------
+
+if (!is.null(rb_model_Opp)) {
+  rb_projection_eval$RB_Proj_Opp <- rb_model_Opp$pred_full
+}
+
+if (!is.null(rb_model_CAR)) {
+  rb_projection_eval$RB_Proj_CAR <- rb_model_CAR$pred_full
+}
+
+if (!is.null(rb_model_TGT_G)) {
+  rb_projection_eval$RB_Proj_TGT_G <- rb_model_TGT_G$pred_full
+}
+
+if (!is.null(rb_model_Scrm_YDs)) {
+  rb_projection_eval$RB_Proj_Scrm_YDs <- rb_model_Scrm_YDs$pred_full
+}
+
+if (!is.null(rb_model_Tot_TDs)) {
+  rb_projection_eval$RB_Proj_TotTDs <- rb_model_Tot_TDs$pred_full
+}
+
+if (!is.null(rb_model_fantasy_direct)) {
+  rb_projection_eval$RB_Proj_FantasyPts <- rb_model_fantasy_direct$pred_full
+}
+
+rb_fantasy_projection_comparison <- if (!is.null(rb_model_fantasy_direct)) {
+  rb_model_fantasy_direct$metrics %>%
+    dplyr::mutate(model_name = "direct_profile") %>%
+    dplyr::select(target, model_name, features, n_train, n_test, rmse, mae, r2, correlation)
+} else {
+  tibble::tibble()
+}
+
+# -------------------------------------------------------------------
+# 7) Eval screens
+# -------------------------------------------------------------------
+
+rb_projection_metric_cols <- c(
+  "RB_Profile_Metric_0to100",
+  "RB_Opportunity_Profile_Metric_0to100",
+  "RB_Yardage_Profile_Metric_0to100",
+  "RB_Receiving_Profile_Metric_0to100",
+  "RB_TD_Profile_Metric_0to100",
+  "RB_Prior_Production_Metric_0to100",
+  "RB_Opportunity_Metric_0to100",
+  "RB_Rush_Efficiency_Metric_0to100",
+  "RB_Explosive_Metric_0to100",
+  "RB_Receiving_Metric_0to100",
+  "RB_TD_Context_Metric_0to100",
+  "RB_Team_Context_Metric_0to100"
+)
+
+rb_projection_metric_cols <- rb_projection_metric_cols[rb_projection_metric_cols %in% names(rb_projection_eval)]
+
+rb_projection_target_screen <- tibble::tibble(
+  metric = rb_projection_metric_cols,
+  cor_to_fantasyPts = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$RB_Fantasy_Target)),
+  cor_to_box_fantasy = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$RB_Box_Fantasy_Target)),
+  cor_to_opp = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$Opp)),
+  cor_to_car = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$CAR)),
+  cor_to_targets = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$TGT_G)),
+  cor_to_scrm_yds = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$Scrm_YDs)),
+  cor_to_tot_tds = sapply(rb_projection_metric_cols, function(col) safe_cor(rb_projection_eval[[col]], rb_projection_eval$Tot_TDs))
+) %>%
+  dplyr::arrange(dplyr::desc(cor_to_fantasyPts))
+
+rb_eval_split_summary <- tibble::tibble(
+  cohort = c("all_rows", "rookies", "non_rookies"),
+  cor_profile_to_fantasy = c(
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100, rb_projection_eval$RB_Fantasy_Target),
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100[rb_projection_eval$is_rookie], rb_projection_eval$RB_Fantasy_Target[rb_projection_eval$is_rookie]),
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100[!rb_projection_eval$is_rookie], rb_projection_eval$RB_Fantasy_Target[!rb_projection_eval$is_rookie])
+  ),
+  cor_profile_to_box = c(
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100, rb_projection_eval$RB_Box_Fantasy_Target),
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100[rb_projection_eval$is_rookie], rb_projection_eval$RB_Box_Fantasy_Target[rb_projection_eval$is_rookie]),
+    safe_cor(rb_projection_eval$RB_Profile_Metric_0to100[!rb_projection_eval$is_rookie], rb_projection_eval$RB_Box_Fantasy_Target[!rb_projection_eval$is_rookie])
+  )
+)
+
+# -------------------------------------------------------------------
+# 8) Review table
+# -------------------------------------------------------------------
+
+rb_projection_summary_final <- rb_projection_eval %>%
+  dplyr::select(
+    Player, TM, WK, is_rookie,
+    RB_Fantasy_Target,
+    RB_Box_Fantasy_Target,
+    Opp,
+    CAR,
+    TGT_G,
+    Scrm_YDs,
+    Tot_TDs,
+    RB_Profile_Metric_0to100,
+    RB_Proj_Opp,
+    RB_Proj_CAR,
+    RB_Proj_TGT_G,
+    RB_Proj_Scrm_YDs,
+    RB_Proj_TotTDs,
+    RB_Proj_FantasyPts
+  ) %>%
+  dplyr::arrange(WK, dplyr::desc(RB_Proj_FantasyPts))
+
 
 
 #WRs
