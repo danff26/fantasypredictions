@@ -29261,13 +29261,53 @@ TE_adv_21 <- TE_adv_21_wk1|>
 #schedule
 TE_sch_21 <- TE_adv_21|>
   left_join(Team_schedule_matchups_21,by = c("TM" = "TM","G" = "G", "WK" = "WK"),suffix = c("_ply","_team"))|>
-  rename(SEA = SEA_ply,gameday = gameday_off, gametime = gametime_off, weekday = weekday_off)|>
-  select(-SEA_team, -gameday_def, -gametime_def, -weekday_def)|>
-  select(Player:POS,SEA,WK,G,G_total_off,depth_team,TM_DEF,report_status:avg_total_wind_def)
+  rename(SEA = SEA_ply)|>
+  select(-dplyr::any_of("SEA_team"))|>
+  mutate(
+    fantasyPts = dplyr::coalesce(
+      FP_G,
+      dplyr::coalesce(RecYDS_G, 0) * 0.10 +
+        dplyr::coalesce(YDS_rush, 0) * 0.10 +
+        6 * dplyr::coalesce(TD, 0) +
+        6 * dplyr::coalesce(TD_rush, 0)
+    )
+  )|>
+  relocate(fantasyPts, .before = depth_team)|>
+  (\(df) {
+    if (!("report_status" %in% names(df))) df$report_status <- NA_character_
+    if (!("practice_primary_injury" %in% names(df))) df$practice_primary_injury <- NA_character_
+    if (!("practice_secondary_injury" %in% names(df))) df$practice_secondary_injury <- NA_character_
+    if (!("practice_status" %in% names(df))) df$practice_status <- NA_character_
+    if ("RTE" %in% names(df)) {
+      df <- dplyr::relocate(
+        df,
+        dplyr::any_of(c("report_status","practice_primary_injury","practice_secondary_injury","practice_status")),
+        .before = RTE
+      )
+    }
+    df
+  })()|>
+  select(Player:POS,SEA,WK,G,dplyr::any_of(c("gameday_off","weekday_off","gametime_off")),G_total_off,fantasyPts,depth_team,TM_DEF,report_status:avg_total_wind_def)
 TE_sch_21$depth_team <- as.numeric(TE_sch_21$depth_team)
 TE_sch_21 <- TE_sch_21|>
   left_join(TE_roster_21, by = c("Player","TM","POS","SEA"))|>
-  select(Player:TM_DEF,birth_date,rookie_year,report_status:avg_total_wind_def)|>
+  rename(gameday = gameday_off,weekday = weekday_off,gametime = gametime_off)|>
+  select(-dplyr::any_of(c("gameday_def","weekday_def","gametime_def")))|>
+  (\(df) {
+    if (!("report_status" %in% names(df))) df$report_status <- NA_character_
+    if (!("practice_primary_injury" %in% names(df))) df$practice_primary_injury <- NA_character_
+    if (!("practice_secondary_injury" %in% names(df))) df$practice_secondary_injury <- NA_character_
+    if (!("practice_status" %in% names(df))) df$practice_status <- NA_character_
+    if ("RTE" %in% names(df)) {
+      df <- dplyr::relocate(
+        df,
+        dplyr::any_of(c("report_status","practice_primary_injury","practice_secondary_injury","practice_status")),
+        .before = RTE
+      )
+    }
+    df
+  })()|>
+  select(Player:TM_DEF,dplyr::any_of(c("gameday","weekday","gametime")),birth_date,rookie_year,report_status:avg_total_wind_def)|>
   left_join(TE_draft_picks,by = c("Player","POS","rookie_year"))|>
   select(Player:rookie_year,TM_draft,round, pick,report_status:avg_total_wind_def)|>
   left_join(combine_21, by = c("Player","POS","round","pick","rookie_year"))|>
@@ -29901,23 +29941,1316 @@ te_21 <- te_21_avg|>
 TE_sch_21 <- te_21
 
 Team_schedule_matchups_21_avg <- Team_schedule_matchups_21|>
-  select(Name:SEA,Head_Coach,HC_pace_Role_avg:avg_total_wind_off,Name_DEF,TM_DEF,Head_Coach_DEF,G_total_off:avg_total_wind_def)
-Team_schedule_matchups_21_unique <- Team_schedule_matchups_21_avg %>%
+  select(
+    Name:SEA,
+    Head_Coach,
+    HC_pace_Role_avg:avg_total_wind_off,
+    Name_DEF,
+    TM_DEF,
+    Head_Coach_DEF,
+    G_total_off:avg_total_wind_def
+  )
+
+team_matchups_21_off_avg <- Team_schedule_matchups_21_avg %>%
+  select(TM, Name, Head_Coach, HC_pace_Role_avg:avg_total_wind_off) %>%
   distinct(TM, .keep_all = TRUE)
-te_21_avg <- te_21_avg %>%
-  distinct(Player, .keep_all = TRUE)
-te_sch_21_avg <- te_21_avg|>
-  left_join(Team_schedule_matchups_21_unique,by = c("TM"))|>
-  rename(SEA = SEA.x,TM_DEF = TM_DEF.x,G = G.x)|>
-  select(-SEA.y,-TM_DEF.y,-G.y)
 
-te_data_clean <- te_sch_21_avg %>%
-  select(-any_of(c("WK", "SEA","TM_DEF")))
+team_matchups_21_def_avg <- Team_schedule_matchups_21_avg %>%
+  select(TM_DEF, Name_DEF, Head_Coach_DEF, G_total_off:avg_total_wind_def) %>%
+  distinct(TM_DEF, .keep_all = TRUE)
+
+te_21_avg <- te_21 %>%
+  distinct(Player, TM, SEA, .keep_all = TRUE)
+
+te_data_clean <- te_21_avg %>%
+  left_join(team_matchups_21_off_avg, by = "TM") %>%
+  select(-any_of(c("WK", "TM_DEF", "gameday", "gametime", "weekday", "G")))
+
 te_sch_21_avg <- schedule_21 %>%
-  inner_join(te_data_clean, by = "TM")
-
+  filter(!is.na(WK), WK <= 18) %>%
+  inner_join(te_data_clean, by = c("TM", "SEA")) %>%
+  (\(df) {
+    if ("avg_total_fantasyPts.x" %in% names(df)) {
+      df$avg_total_fantasyPts <- df$avg_total_fantasyPts.x
+    }
+    if ("avg_total_fantasyPts.y" %in% names(df)) {
+      df$avg_total_fantasyPts_off <- df$avg_total_fantasyPts.y
+    }
+    if (!("avg_total_fantasyPts_off" %in% names(df))) {
+      df$avg_total_fantasyPts_off <- NA_real_
+    }
+    df
+  })() %>%
+  select(-any_of(c("avg_total_fantasyPts.x", "avg_total_fantasyPts.y"))) %>%
+  left_join(team_matchups_21_def_avg, by = "TM_DEF") %>%
+  select(
+    Player:depth_team,
+    TM:gametime,
+    G_total_off,
+    TM_DEF,
+    TE_Depth_Role,
+    Draft_Day:shuttle,
+    TE_forty_Role:avg_total_wind_def,
+    away_score:stadium
+  )
 te_sch_21_avg <- te_sch_21_avg|>
-  select(Player:depth_team,TM:gametime,G_total_off,TM_DEF,TE_Depth_Role,Draft_Day:shuttle,TE_forty_Role:avg_total_wind_def,away_score:stadium)
+  (\(df) {
+    df$avg_total_fantasyPts <- df$avg_total_fantasyPts.x
+    
+    if ("avg_total_fantasyPts_off" %in% names(df)) {
+      df$avg_total_fantasyPts_off <- dplyr::coalesce(
+        df$avg_total_fantasyPts_off,
+        df$avg_total_fantasyPts.y
+      )
+    } else {
+      df$avg_total_fantasyPts_off <- df$avg_total_fantasyPts.y
+    }
+    
+    df
+  })()|>
+  select(-dplyr::any_of(c("avg_total_fantasyPts.x","avg_total_fantasyPts.y")))
+
+# -------------------- TE final veteran metric block --------------------
+# Main output table: te_sch_21_avg
+# Official veteran TE score uses the v3 target-heavy blend from the retest.
+# Team context and matchup are stored, but not included in the official blend.
+
+if (!exists("safe_cor")) {
+  safe_cor <- function(x, y) {
+    x <- suppressWarnings(as.numeric(x))
+    y <- suppressWarnings(as.numeric(y))
+    
+    if (all(is.na(x)) || all(is.na(y))) return(NA_real_)
+    if (sd(x, na.rm = TRUE) == 0 || sd(y, na.rm = TRUE) == 0) return(NA_real_)
+    
+    cor(x, y, use = "pairwise.complete.obs")
+  }
+}
+
+if (!exists("rescale_0_100")) {
+  rescale_0_100 <- function(x) {
+    rng <- range(x, na.rm = TRUE)
+    if (!all(is.finite(rng)) || diff(rng) == 0) return(rep(50, length(x)))
+    (x - rng[1]) / diff(rng) * 100
+  }
+}
+
+if (!exists("pct_score")) {
+  pct_score <- function(x, inverse = FALSE) {
+    x_num <- suppressWarnings(as.numeric(x))
+    out <- dplyr::percent_rank(x_num) * 100
+    
+    default_val <- median(out, na.rm = TRUE)
+    if (!is.finite(default_val)) default_val <- 50
+    
+    out[is.na(out)] <- default_val
+    if (inverse) out <- 100 - out
+    
+    as.numeric(out)
+  }
+}
+
+if (!exists("role_score_from_target")) {
+  role_score_from_target <- function(role_vec, target_vec) {
+    d <- tibble::tibble(
+      role = as.character(role_vec),
+      target = suppressWarnings(as.numeric(target_vec))
+    ) %>%
+      dplyr::filter(!is.na(role), !is.na(target))
+    
+    if (nrow(d) == 0) return(rep(50, length(role_vec)))
+    
+    level_means <- d %>%
+      dplyr::group_by(role) %>%
+      dplyr::summarise(mean_target = mean(target, na.rm = TRUE), .groups = "drop")
+    
+    level_means$score_0to100 <- rescale_0_100(level_means$mean_target)
+    
+    score_map <- setNames(level_means$score_0to100, level_means$role)
+    out <- unname(score_map[as.character(role_vec)])
+    
+    default_val <- mean(level_means$score_0to100, na.rm = TRUE)
+    if (!is.finite(default_val)) default_val <- 50
+    
+    out[is.na(out)] <- default_val
+    as.numeric(out)
+  }
+}
+
+if (!exists("row_weighted_mean")) {
+  row_weighted_mean <- function(df, weights) {
+    mat <- as.matrix(df)
+    weights <- as.numeric(weights)
+    
+    num <- rowSums(sweep(mat, 2, weights, `*`), na.rm = TRUE)
+    den <- rowSums((!is.na(mat)) * matrix(weights, nrow = nrow(mat), ncol = ncol(mat), byrow = TRUE))
+    
+    ifelse(den == 0, NA_real_, num / den)
+  }
+}
+
+if (!exists("build_group_score")) {
+  build_group_score <- function(data, score_cols, target_col = "FP") {
+    score_cols <- intersect(score_cols, names(data))
+    
+    if (length(score_cols) == 0) {
+      return(rep(NA_real_, nrow(data)))
+    }
+    
+    w <- sapply(score_cols, function(col) abs(safe_cor(data[[col]], data[[target_col]])))
+    w[is.na(w)] <- 0
+    
+    if (sum(w) == 0) w[] <- 1
+    w <- w / sum(w)
+    
+    row_weighted_mean(data[, score_cols, drop = FALSE], w)
+  }
+}
+
+if (!exists("build_weighted_metric")) {
+  build_weighted_metric <- function(data, weight_map) {
+    keep_cols <- names(weight_map)[names(weight_map) %in% names(data)]
+    
+    if (length(keep_cols) == 0) {
+      return(rep(NA_real_, nrow(data)))
+    }
+    
+    w <- weight_map[keep_cols]
+    w <- w / sum(w)
+    
+    row_weighted_mean(data[, keep_cols, drop = FALSE], w)
+  }
+}
+
+te_build_group_score <- function(df, cols, target_col) {
+  cols <- intersect(cols, names(df))
+  if (length(cols) == 0) return(rep(NA_real_, nrow(df)))
+  build_group_score(df, cols, target_col)
+}
+
+# -------------------------------------------------------------------
+# 1) Build eval table
+# -------------------------------------------------------------------
+
+te_metric_targets_21 <- TE_sch_21 %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM, WK, dplyr::desc(fantasyPts)) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::select(
+    Player, TM, WK,
+    dplyr::any_of(c(
+      "fantasyPts",
+      "TGT_G",
+      "TGT_PCT",
+      "RTE_PCT",
+      "RecYDS_G",
+      "CAR",
+      "YDS_rush",
+      "TD",
+      "TD_rush",
+      "FP_G_rec",
+      "XFP_G_rec",
+      "RecXFP"
+    ))
+  ) %>%
+  dplyr::rename_with(
+    .fn = ~ paste0(.x, "_week"),
+    .cols = -c(Player, TM, WK)
+  )
+
+te_metric_df <- te_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM, WK) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::left_join(te_metric_targets_21, by = c("Player", "TM", "WK")) %>%
+  dplyr::mutate(
+    Scrm_YDs_week = dplyr::coalesce(RecYDS_G_week, 0) + dplyr::coalesce(YDS_rush_week, 0),
+    Tot_TDs_week = dplyr::coalesce(TD_week, 0) + dplyr::coalesce(TD_rush_week, 0),
+    TE_Box_Fantasy_Target =
+      dplyr::coalesce(RecYDS_G_week, 0) * 0.10 +
+      dplyr::coalesce(YDS_rush_week, 0) * 0.10 +
+      6 * dplyr::coalesce(TD_week, 0) +
+      6 * dplyr::coalesce(TD_rush_week, 0),
+    TE_Fantasy_Target = dplyr::coalesce(fantasyPts_week, TE_Box_Fantasy_Target)
+  ) %>%
+  dplyr::filter(!is.na(fantasyPts_week))
+
+# -------------------------------------------------------------------
+# 2) Score veteran TE inputs
+# -------------------------------------------------------------------
+
+te_positive_numeric_features <- intersect(
+  c(
+    "avg_total_fantasyPts",
+    "avg_total_FP_G_rec",
+    "avg_total_XFP_G_rec",
+    "avg_total_RecXFP",
+    "avg_total_RTE_PCT",
+    "avg_total_RTE",
+    "avg_total_TGT_G",
+    "avg_total_TGT_PCT",
+    "avg_total_X1READ",
+    "avg_total_TM_RecYDS_PCT",
+    "avg_total_TPRR",
+    "avg_total_YPRR",
+    "avg_total_YPT",
+    "avg_total_YPTOE",
+    "avg_total_X1D_RR",
+    "avg_total_Catch_Rate",
+    "avg_total_Catchable_TGT_PCT",
+    "avg_total_Catchable_TGT_Rate",
+    "avg_total_aDOT",
+    "avg_total_AY_Share",
+    "avg_total_INLINE_RTE_PCT",
+    "avg_total_YAC",
+    "avg_total_YAC_REC",
+    "avg_total_MTF_REC",
+    "avg_total_TD",
+    "avg_total_TD_rush",
+    "avg_total_TM_Rec_TD_PCT",
+    "avg_total_TM_RecTD_PCT",
+    "avg_total_EZTGT",
+    "avg_total_Pts_scr",
+    "avg_total_total_plys_off",
+    "avg_total_RZ_opp"
+  ),
+  names(te_metric_df)
+)
+
+te_role_features <- intersect(
+  c(
+    "TE_RTE_Role_avg",
+    "TE_TGT_PCT_Role_avg",
+    "TE_TM_RecYDS_PCT_Role_avg",
+    "TE_X1READ_Role_avg",
+    "TE_TPRR_Role_avg",
+    "TE_YPRR_Role_avg",
+    "TE_YPT_Role_avg",
+    "TE_YPTOE_Role_avg",
+    "TE_X1D_RR_Role_avg",
+    "TE_Catch_Rate_Role_avg",
+    "TE_ADOT_Role_avg",
+    "TE_AY_Share_Role_avg",
+    "TE_ALIGN_RTE_PCT_Role_avg",
+    "TE_YAC_Role_avg",
+    "TE_YAC_REC_Role_avg",
+    "TE_TGT_TD_PCT_Role_avg",
+    "TE_EZTGT_Role_avg"
+  ),
+  names(te_metric_df)
+)
+
+for (col in te_positive_numeric_features) {
+  te_metric_df[[paste0("score_", col)]] <- pct_score(te_metric_df[[col]], inverse = FALSE)
+}
+
+for (col in te_role_features) {
+  te_metric_df[[paste0("score_", col)]] <- role_score_from_target(
+    te_metric_df[[col]],
+    te_metric_df$TE_Fantasy_Target
+  )
+}
+
+# -------------------------------------------------------------------
+# 3) Veteran TE sub-metrics
+# -------------------------------------------------------------------
+
+te_metric_df$TE_History_Metric_0to100 <- te_build_group_score(
+  te_metric_df,
+  c(
+    "score_avg_total_fantasyPts",
+    "score_avg_total_FP_G_rec",
+    "score_avg_total_XFP_G_rec",
+    "score_avg_total_RecXFP"
+  ),
+  "TE_Fantasy_Target"
+)
+
+te_metric_df$TE_Target_Earning_Metric_0to100 <- te_build_group_score(
+  te_metric_df,
+  c(
+    "score_avg_total_RTE_PCT",
+    "score_avg_total_RTE",
+    "score_avg_total_TGT_G",
+    "score_avg_total_TGT_PCT",
+    "score_avg_total_X1READ",
+    "score_avg_total_TM_RecYDS_PCT",
+    "score_avg_total_RecXFP",
+    "score_TE_RTE_Role_avg",
+    "score_TE_TGT_PCT_Role_avg",
+    "score_TE_TM_RecYDS_PCT_Role_avg",
+    "score_TE_X1READ_Role_avg"
+  ),
+  "TE_Fantasy_Target"
+)
+
+te_metric_df$TE_Yardage_Efficiency_Metric_0to100 <- te_build_group_score(
+  te_metric_df,
+  c(
+    "score_avg_total_TPRR",
+    "score_avg_total_YPRR",
+    "score_avg_total_YPT",
+    "score_avg_total_YPTOE",
+    "score_avg_total_X1D_RR",
+    "score_avg_total_Catch_Rate",
+    "score_avg_total_Catchable_TGT_PCT",
+    "score_avg_total_Catchable_TGT_Rate",
+    "score_TE_TPRR_Role_avg",
+    "score_TE_YPRR_Role_avg",
+    "score_TE_YPT_Role_avg",
+    "score_TE_YPTOE_Role_avg",
+    "score_TE_X1D_RR_Role_avg",
+    "score_TE_Catch_Rate_Role_avg"
+  ),
+  "TE_Fantasy_Target"
+)
+
+te_metric_df$TE_AirYards_Metric_0to100 <- te_build_group_score(
+  te_metric_df,
+  c(
+    "score_avg_total_aDOT",
+    "score_avg_total_AY_Share",
+    "score_avg_total_INLINE_RTE_PCT",
+    "score_TE_ADOT_Role_avg",
+    "score_TE_AY_Share_Role_avg",
+    "score_TE_ALIGN_RTE_PCT_Role_avg"
+  ),
+  "TE_Fantasy_Target"
+)
+
+te_metric_df$TE_YAC_Metric_0to100 <- te_build_group_score(
+  te_metric_df,
+  c(
+    "score_avg_total_YAC",
+    "score_avg_total_YAC_REC",
+    "score_avg_total_MTF_REC",
+    "score_TE_YAC_Role_avg",
+    "score_TE_YAC_REC_Role_avg"
+  ),
+  "TE_Fantasy_Target"
+)
+
+te_metric_df$TE_TD_Conversion_Metric_0to100 <- te_build_group_score(
+  te_metric_df,
+  c(
+    "score_avg_total_TD",
+    "score_avg_total_TD_rush",
+    "score_avg_total_TM_Rec_TD_PCT",
+    "score_avg_total_TM_RecTD_PCT",
+    "score_avg_total_EZTGT",
+    "score_TE_TGT_TD_PCT_Role_avg",
+    "score_TE_EZTGT_Role_avg"
+  ),
+  "TE_Fantasy_Target"
+)
+
+te_metric_df$TE_Team_Context_Metric_0to100 <- te_build_group_score(
+  te_metric_df,
+  c(
+    "score_avg_total_Pts_scr",
+    "score_avg_total_total_plys_off",
+    "score_avg_total_RZ_opp"
+  ),
+  "TE_Fantasy_Target"
+)
+
+# -------------------------------------------------------------------
+# 4) Official veteran TE fantasy metric
+# v3 winner
+# -------------------------------------------------------------------
+
+te_metric_df$TE_Fantasy_Base_Metric_0to100 <- build_weighted_metric(
+  te_metric_df,
+  c(
+    TE_History_Metric_0to100 = 0.12,
+    TE_Target_Earning_Metric_0to100 = 0.38,
+    TE_Yardage_Efficiency_Metric_0to100 = 0.16,
+    TE_AirYards_Metric_0to100 = 0.10,
+    TE_YAC_Metric_0to100 = 0.08,
+    TE_TD_Conversion_Metric_0to100 = 0.16
+  )
+)
+
+te_metric_df$TE_Fantasy_Base_Grade <- grade_from_score(
+  te_metric_df$TE_Fantasy_Base_Metric_0to100
+)
+
+te_metric_df$TE_Fantasy_Final_Metric_0to100 <- te_metric_df$TE_Fantasy_Base_Metric_0to100
+te_metric_df$TE_Fantasy_Final_Grade <- grade_from_score(
+  te_metric_df$TE_Fantasy_Final_Metric_0to100
+)
+
+# -------------------------------------------------------------------
+# 5) TE matchup metric (stored separately, not blended)
+# -------------------------------------------------------------------
+
+te_matchup_positive_numeric <- intersect(
+  c(
+    "avg_total_X1READ_def",
+    "avg_total_INLINE_TGT_RATE_def",
+    "avg_total_RecYDS_G_def",
+    "avg_total_YPRR_def",
+    "avg_total_YPT_def",
+    "avg_total_Catch_Rate_def",
+    "avg_total_YAC_def",
+    "avg_total_YAC_REC_def",
+    "avg_total_MTF_REC_def",
+    "avg_total_aDOT_def",
+    "avg_total_aDOT_rec_def",
+    "avg_total_TD_def",
+    "avg_total_TM_Rec_TD_PCT_def",
+    "avg_total_TM_RecTD_PCT_def",
+    "avg_total_EZTGT_def",
+    "avg_total_RZ_opp_Allw",
+    "avg_total_total_plys_def",
+    "avg_total_PTs_allw"
+  ),
+  names(te_metric_df)
+)
+
+te_matchup_role_features <- intersect(
+  c(
+    "HC_INLINE_TGT_DEF_Role_avg",
+    "HC_Plays_Allw_Role_avg",
+    "Team_RZ_DEF_Role_avg",
+    "Team_RZ_Pass_Run_DEF_Role_avg",
+    "Team_Pts_Allw_Role_avg",
+    "Team_PTs_allw_Role_avg"
+  ),
+  names(te_metric_df)
+)
+
+for (col in te_matchup_positive_numeric) {
+  te_metric_df[[paste0("matchup_score_", col)]] <- pct_score(te_metric_df[[col]], inverse = FALSE)
+}
+
+for (col in te_matchup_role_features) {
+  te_metric_df[[paste0("matchup_score_", col)]] <- role_score_from_target(
+    te_metric_df[[col]],
+    te_metric_df$TE_Fantasy_Target
+  )
+}
+
+te_metric_df$TE_Matchup_Target_Funnel_Metric_0to100 <- te_build_group_score(
+  te_metric_df,
+  c(
+    "matchup_score_avg_total_X1READ_def",
+    "matchup_score_avg_total_INLINE_TGT_RATE_def",
+    "matchup_score_HC_INLINE_TGT_DEF_Role_avg"
+  ),
+  "TE_Fantasy_Target"
+)
+
+te_metric_df$TE_Matchup_Yardage_Metric_0to100 <- te_build_group_score(
+  te_metric_df,
+  c(
+    "matchup_score_avg_total_RecYDS_G_def",
+    "matchup_score_avg_total_YPRR_def",
+    "matchup_score_avg_total_YPT_def",
+    "matchup_score_avg_total_Catch_Rate_def",
+    "matchup_score_avg_total_YAC_def",
+    "matchup_score_avg_total_YAC_REC_def",
+    "matchup_score_avg_total_MTF_REC_def",
+    "matchup_score_avg_total_aDOT_def",
+    "matchup_score_avg_total_aDOT_rec_def"
+  ),
+  "TE_Fantasy_Target"
+)
+
+te_metric_df$TE_Matchup_TD_Metric_0to100 <- te_build_group_score(
+  te_metric_df,
+  c(
+    "matchup_score_avg_total_TD_def",
+    "matchup_score_avg_total_TM_Rec_TD_PCT_def",
+    "matchup_score_avg_total_TM_RecTD_PCT_def",
+    "matchup_score_avg_total_EZTGT_def",
+    "matchup_score_avg_total_RZ_opp_Allw",
+    "matchup_score_Team_RZ_DEF_Role_avg",
+    "matchup_score_Team_RZ_Pass_Run_DEF_Role_avg"
+  ),
+  "TE_Fantasy_Target"
+)
+
+te_metric_df$TE_Matchup_Game_Script_Metric_0to100 <- te_build_group_score(
+  te_metric_df,
+  c(
+    "matchup_score_avg_total_total_plys_def",
+    "matchup_score_avg_total_PTs_allw",
+    "matchup_score_HC_Plays_Allw_Role_avg",
+    "matchup_score_Team_Pts_Allw_Role_avg",
+    "matchup_score_Team_PTs_allw_Role_avg"
+  ),
+  "TE_Fantasy_Target"
+)
+
+te_metric_df$TE_Matchup_Metric_0to100 <- build_weighted_metric(
+  te_metric_df,
+  c(
+    TE_Matchup_Target_Funnel_Metric_0to100 = 0.35,
+    TE_Matchup_Yardage_Metric_0to100 = 0.30,
+    TE_Matchup_TD_Metric_0to100 = 0.20,
+    TE_Matchup_Game_Script_Metric_0to100 = 0.15
+  )
+)
+
+te_metric_df$TE_Matchup_Grade <- grade_from_score(
+  te_metric_df$TE_Matchup_Metric_0to100
+)
+
+# -------------------------------------------------------------------
+# 6) Store final veteran TE columns on te_sch_21_avg
+# -------------------------------------------------------------------
+
+te_cols_to_store <- c(
+  "TE_History_Metric_0to100",
+  "TE_Target_Earning_Metric_0to100",
+  "TE_Yardage_Efficiency_Metric_0to100",
+  "TE_AirYards_Metric_0to100",
+  "TE_YAC_Metric_0to100",
+  "TE_TD_Conversion_Metric_0to100",
+  "TE_Team_Context_Metric_0to100",
+  "TE_Fantasy_Base_Metric_0to100",
+  "TE_Fantasy_Base_Grade",
+  "TE_Matchup_Target_Funnel_Metric_0to100",
+  "TE_Matchup_Yardage_Metric_0to100",
+  "TE_Matchup_TD_Metric_0to100",
+  "TE_Matchup_Game_Script_Metric_0to100",
+  "TE_Matchup_Metric_0to100",
+  "TE_Matchup_Grade",
+  "TE_Fantasy_Final_Metric_0to100",
+  "TE_Fantasy_Final_Grade"
+)
+
+te_sch_21_avg <- te_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::select(-dplyr::any_of(te_cols_to_store)) %>%
+  dplyr::left_join(
+    te_metric_df %>%
+      dplyr::select(Player, TM, WK, dplyr::any_of(te_cols_to_store)) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE),
+    by = c("Player", "TM", "WK")
+  )
+
+# -------------------------------------------------------------------
+# 7) Optional review table
+# -------------------------------------------------------------------
+
+te_metric_summary_final <- te_metric_df %>%
+  dplyr::select(
+    Player, TM, WK,
+    TE_Fantasy_Target,
+    TE_Box_Fantasy_Target,
+    TGT_G_week,
+    RecYDS_G_week,
+    Scrm_YDs_week,
+    Tot_TDs_week,
+    TE_History_Metric_0to100,
+    TE_Target_Earning_Metric_0to100,
+    TE_Yardage_Efficiency_Metric_0to100,
+    TE_AirYards_Metric_0to100,
+    TE_YAC_Metric_0to100,
+    TE_TD_Conversion_Metric_0to100,
+    TE_Team_Context_Metric_0to100,
+    TE_Fantasy_Base_Metric_0to100,
+    TE_Matchup_Metric_0to100,
+    TE_Fantasy_Final_Metric_0to100,
+    TE_Fantasy_Final_Grade
+  ) %>%
+  dplyr::arrange(WK, dplyr::desc(TE_Fantasy_Final_Metric_0to100))
+
+# -------------------- TE final rookie metric block --------------------
+# Main output table: te_sch_21_avg
+# Rookie filter: SEA == rookie_year
+# Official rookie TE score uses the v3 context-heavy blend from the retest.
+
+te_rookie_build_group_score <- function(df, cols, target_col) {
+  cols <- intersect(cols, names(df))
+  if (length(cols) == 0) return(rep(NA_real_, nrow(df)))
+  build_group_score(df, cols, target_col)
+}
+
+# -------------------------------------------------------------------
+# 1) Build rookie eval table
+# -------------------------------------------------------------------
+
+te_rookie_targets_21 <- TE_sch_21 %>%
+  dplyr::mutate(
+    WK = suppressWarnings(as.integer(WK)),
+    SEA_num = suppressWarnings(as.integer(as.character(SEA))),
+    rookie_year_num = suppressWarnings(as.integer(as.character(rookie_year)))
+  ) %>%
+  dplyr::filter(
+    !is.na(WK),
+    WK <= 18,
+    !is.na(SEA_num),
+    !is.na(rookie_year_num),
+    SEA_num == rookie_year_num
+  ) %>%
+  dplyr::arrange(Player, TM, WK, dplyr::desc(fantasyPts)) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::select(
+    Player, TM, WK,
+    dplyr::any_of(c(
+      "fantasyPts",
+      "TGT_G",
+      "RecYDS_G",
+      "YDS_rush",
+      "TD",
+      "TD_rush",
+      "FP_G_rec",
+      "XFP_G_rec",
+      "RecXFP"
+    ))
+  ) %>%
+  dplyr::rename_with(
+    .fn = ~ paste0(.x, "_week"),
+    .cols = -c(Player, TM, WK)
+  )
+
+te_rookie_df <- te_sch_21_avg %>%
+  dplyr::mutate(
+    WK = suppressWarnings(as.integer(WK)),
+    SEA_num = suppressWarnings(as.integer(as.character(SEA))),
+    rookie_year_num = suppressWarnings(as.integer(as.character(rookie_year)))
+  ) %>%
+  dplyr::filter(
+    !is.na(WK),
+    WK <= 18,
+    !is.na(SEA_num),
+    !is.na(rookie_year_num),
+    SEA_num == rookie_year_num
+  ) %>%
+  dplyr::arrange(Player, TM, WK) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::left_join(te_rookie_targets_21, by = c("Player", "TM", "WK")) %>%
+  dplyr::mutate(
+    Scrm_YDs_week = dplyr::coalesce(RecYDS_G_week, 0) + dplyr::coalesce(YDS_rush_week, 0),
+    Tot_TDs_week = dplyr::coalesce(TD_week, 0) + dplyr::coalesce(TD_rush_week, 0),
+    TE_Box_Fantasy_Target =
+      dplyr::coalesce(RecYDS_G_week, 0) * 0.10 +
+      dplyr::coalesce(YDS_rush_week, 0) * 0.10 +
+      6 * dplyr::coalesce(TD_week, 0) +
+      6 * dplyr::coalesce(TD_rush_week, 0),
+    TE_Rookie_Fantasy_Target = dplyr::coalesce(fantasyPts_week, TE_Box_Fantasy_Target)
+  ) %>%
+  dplyr::filter(!is.na(fantasyPts_week))
+
+# -------------------------------------------------------------------
+# 2) Score rookie TE inputs
+# -------------------------------------------------------------------
+
+te_rookie_positive_numeric_features <- intersect(
+  c(
+    "Ht",
+    "Wt",
+    "bench",
+    "vertical",
+    "broad_jump"
+  ),
+  names(te_rookie_df)
+)
+
+te_rookie_inverse_numeric_features <- intersect(
+  c(
+    "age",
+    "round",
+    "pick",
+    "forty",
+    "cone",
+    "shuttle"
+  ),
+  names(te_rookie_df)
+)
+
+te_rookie_role_features <- intersect(
+  c(
+    "Draft_Day",
+    "TE_forty_Role",
+    "TE_bench_Role",
+    "TE_vertical_Role",
+    "TE_broad_jump_Role",
+    "TE_cone_Role",
+    "TE_shuttle_Role",
+    "TE_Depth_Role",
+    "depth_team",
+    "report_status",
+    "practice_status"
+  ),
+  names(te_rookie_df)
+)
+
+for (col in te_rookie_positive_numeric_features) {
+  te_rookie_df[[paste0("score_", col)]] <- pct_score(te_rookie_df[[col]], inverse = FALSE)
+}
+
+for (col in te_rookie_inverse_numeric_features) {
+  te_rookie_df[[paste0("score_", col)]] <- pct_score(te_rookie_df[[col]], inverse = TRUE)
+}
+
+for (col in te_rookie_role_features) {
+  te_rookie_df[[paste0("score_", col)]] <- role_score_from_target(
+    te_rookie_df[[col]],
+    te_rookie_df$TE_Rookie_Fantasy_Target
+  )
+}
+
+# -------------------------------------------------------------------
+# 3) Rookie TE sub-metrics
+# -------------------------------------------------------------------
+
+te_rookie_df$TE_Rookie_Draft_Metric_0to100 <- te_rookie_build_group_score(
+  te_rookie_df,
+  c(
+    "score_Draft_Day",
+    "score_age",
+    "score_round",
+    "score_pick"
+  ),
+  "TE_Rookie_Fantasy_Target"
+)
+
+te_rookie_df$TE_Rookie_Athleticism_Metric_0to100 <- te_rookie_build_group_score(
+  te_rookie_df,
+  c(
+    "score_Ht",
+    "score_Wt",
+    "score_forty",
+    "score_bench",
+    "score_vertical",
+    "score_broad_jump",
+    "score_cone",
+    "score_shuttle",
+    "score_TE_forty_Role",
+    "score_TE_bench_Role",
+    "score_TE_vertical_Role",
+    "score_TE_broad_jump_Role",
+    "score_TE_cone_Role",
+    "score_TE_shuttle_Role"
+  ),
+  "TE_Rookie_Fantasy_Target"
+)
+
+te_rookie_df$TE_Rookie_Role_Readiness_Metric_0to100 <- te_rookie_build_group_score(
+  te_rookie_df,
+  c(
+    "score_TE_Depth_Role",
+    "score_depth_team",
+    "score_report_status",
+    "score_practice_status"
+  ),
+  "TE_Rookie_Fantasy_Target"
+)
+
+te_rookie_df$TE_Rookie_Context_Metric_0to100 <- build_weighted_metric(
+  te_rookie_df,
+  c(
+    TE_Target_Earning_Metric_0to100 = 0.60,
+    TE_AirYards_Metric_0to100 = 0.20,
+    TE_TD_Conversion_Metric_0to100 = 0.20
+  )
+)
+
+# -------------------------------------------------------------------
+# 4) Official rookie TE fantasy metric
+# v3 winner
+# -------------------------------------------------------------------
+
+te_rookie_df$TE_Rookie_Final_Metric_0to100 <- build_weighted_metric(
+  te_rookie_df,
+  c(
+    TE_Rookie_Context_Metric_0to100 = 0.50,
+    TE_Rookie_Draft_Metric_0to100 = 0.25,
+    TE_Rookie_Athleticism_Metric_0to100 = 0.10,
+    TE_Rookie_Role_Readiness_Metric_0to100 = 0.15
+  )
+)
+
+te_rookie_df$TE_Rookie_Final_Grade <- grade_from_score(
+  te_rookie_df$TE_Rookie_Final_Metric_0to100
+)
+
+# -------------------------------------------------------------------
+# 5) Store rookie TE columns on te_sch_21_avg
+# -------------------------------------------------------------------
+
+te_rookie_cols_to_store <- c(
+  "TE_Rookie_Draft_Metric_0to100",
+  "TE_Rookie_Athleticism_Metric_0to100",
+  "TE_Rookie_Role_Readiness_Metric_0to100",
+  "TE_Rookie_Context_Metric_0to100",
+  "TE_Rookie_Final_Metric_0to100",
+  "TE_Rookie_Final_Grade"
+)
+
+te_sch_21_avg <- te_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::select(-dplyr::any_of(te_rookie_cols_to_store)) %>%
+  dplyr::left_join(
+    te_rookie_df %>%
+      dplyr::select(Player, TM, WK, dplyr::any_of(te_rookie_cols_to_store)) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE),
+    by = c("Player", "TM", "WK")
+  )
+
+# -------------------------------------------------------------------
+# 6) Optional review table
+# -------------------------------------------------------------------
+
+te_rookie_summary_final <- te_rookie_df %>%
+  dplyr::select(
+    Player, TM, WK,
+    TE_Rookie_Fantasy_Target,
+    TE_Box_Fantasy_Target,
+    dplyr::any_of(c(
+      "round",
+      "pick",
+      "Draft_Day",
+      "age",
+      "TE_Depth_Role",
+      "TGT_G_week",
+      "RecYDS_G_week",
+      "Scrm_YDs_week",
+      "Tot_TDs_week",
+      "TE_Rookie_Draft_Metric_0to100",
+      "TE_Rookie_Athleticism_Metric_0to100",
+      "TE_Rookie_Role_Readiness_Metric_0to100",
+      "TE_Rookie_Context_Metric_0to100",
+      "TE_Rookie_Final_Metric_0to100",
+      "TE_Rookie_Final_Grade"
+    ))
+  ) %>%
+  dplyr::arrange(WK, dplyr::desc(TE_Rookie_Final_Metric_0to100))
+
+# -------------------- TE final eval block --------------------
+# Uses locked veteran and rookie TE paths.
+# Official TE fantasy eval uses the direct profile model.
+# RecYDS model uses target + context to avoid the high-VIF overlap.
+
+# -------------------------------------------------------------------
+# 1) Helper functions
+# -------------------------------------------------------------------
+
+if (!exists("rmse")) {
+  rmse <- function(actual, predicted) {
+    sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+  }
+}
+
+if (!exists("mae")) {
+  mae <- function(actual, predicted) {
+    mean(abs(actual - predicted), na.rm = TRUE)
+  }
+}
+
+if (!exists("rsq")) {
+  rsq <- function(actual, predicted) {
+    1 - sum((actual - predicted)^2, na.rm = TRUE) /
+      sum((actual - mean(actual, na.rm = TRUE))^2, na.rm = TRUE)
+  }
+}
+
+if (!exists("safe_cor")) {
+  safe_cor <- function(x, y) {
+    x <- suppressWarnings(as.numeric(x))
+    y <- suppressWarnings(as.numeric(y))
+    
+    if (all(is.na(x)) || all(is.na(y))) return(NA_real_)
+    if (sd(x, na.rm = TRUE) == 0 || sd(y, na.rm = TRUE) == 0) return(NA_real_)
+    
+    cor(x, y, use = "pairwise.complete.obs")
+  }
+}
+
+if (!exists("calc_vif_table")) {
+  calc_vif_table <- function(df, features) {
+    features <- features[features %in% names(df)]
+    
+    if (length(features) <= 1) {
+      return(tibble::tibble(feature = features, vif = 1))
+    }
+    
+    d <- df[, features, drop = FALSE]
+    d <- d[stats::complete.cases(d), , drop = FALSE]
+    
+    if (nrow(d) < 10) {
+      return(tibble::tibble(feature = features, vif = NA_real_))
+    }
+    
+    vif_vals <- sapply(features, function(f) {
+      others <- setdiff(features, f)
+      
+      if (length(others) == 0) return(1)
+      
+      fit <- stats::lm(
+        stats::as.formula(paste(f, "~", paste(others, collapse = " + "))),
+        data = d
+      )
+      
+      r2 <- summary(fit)$r.squared
+      if (is.na(r2) || r2 >= 0.9999) return(Inf)
+      
+      1 / (1 - r2)
+    })
+    
+    tibble::tibble(
+      feature = names(vif_vals),
+      vif = as.numeric(vif_vals)
+    )
+  }
+}
+
+if (!exists("fit_target_model")) {
+  fit_target_model <- function(train_df, test_df, full_df, target, features, clip_zero = TRUE) {
+    features <- features[features %in% names(train_df)]
+    
+    if (!(target %in% names(train_df)) || length(features) == 0) {
+      return(NULL)
+    }
+    
+    train_use <- train_df %>%
+      dplyr::select(dplyr::all_of(c(target, features))) %>%
+      dplyr::filter(stats::complete.cases(.))
+    
+    test_use <- test_df %>%
+      dplyr::select(dplyr::all_of(c(target, features))) %>%
+      dplyr::filter(stats::complete.cases(.))
+    
+    if (nrow(train_use) < 20 || nrow(test_use) < 5) {
+      return(NULL)
+    }
+    
+    model_formula <- stats::as.formula(
+      paste(target, "~", paste(features, collapse = " + "))
+    )
+    
+    fit <- stats::lm(model_formula, data = train_use)
+    
+    pred_test <- stats::predict(fit, newdata = test_use)
+    pred_full <- stats::predict(fit, newdata = full_df)
+    
+    if (clip_zero) {
+      pred_test <- ifelse(is.na(pred_test), NA_real_, pmax(0, pred_test))
+      pred_full <- ifelse(is.na(pred_full), NA_real_, pmax(0, pred_full))
+    }
+    
+    metrics <- tibble::tibble(
+      target = target,
+      features = paste(features, collapse = " + "),
+      n_train = nrow(train_use),
+      n_test = nrow(test_use),
+      rmse = rmse(test_use[[target]], pred_test),
+      mae = mae(test_use[[target]], pred_test),
+      r2 = rsq(test_use[[target]], pred_test),
+      correlation = safe_cor(test_use[[target]], pred_test)
+    )
+    
+    vif_tbl <- calc_vif_table(train_use, features) %>%
+      dplyr::mutate(target = target)
+    
+    list(
+      fit = fit,
+      pred_full = pred_full,
+      metrics = metrics,
+      vif = vif_tbl
+    )
+  }
+}
+
+# -------------------------------------------------------------------
+# 2) Build eval source
+# -------------------------------------------------------------------
+
+te_projection_eval <- TE_sch_21 %>%
+  dplyr::mutate(
+    WK = suppressWarnings(as.integer(WK)),
+    SEA_num = suppressWarnings(as.integer(as.character(SEA))),
+    rookie_year_num = suppressWarnings(as.integer(as.character(rookie_year)))
+  ) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM, WK, dplyr::desc(fantasyPts)) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::select(
+    Player, TM, WK, SEA_num, rookie_year_num,
+    dplyr::any_of(c(
+      "fantasyPts",
+      "TGT_G",
+      "RecYDS_G",
+      "YDS_rush",
+      "TD",
+      "TD_rush"
+    ))
+  ) %>%
+  dplyr::left_join(
+    te_sch_21_avg %>%
+      dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+      dplyr::arrange(Player, TM, WK) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+      dplyr::select(
+        Player, TM, WK,
+        dplyr::any_of(c(
+          "TE_History_Metric_0to100",
+          "TE_Target_Earning_Metric_0to100",
+          "TE_Yardage_Efficiency_Metric_0to100",
+          "TE_AirYards_Metric_0to100",
+          "TE_YAC_Metric_0to100",
+          "TE_TD_Conversion_Metric_0to100",
+          "TE_Team_Context_Metric_0to100",
+          "TE_Matchup_Metric_0to100",
+          "TE_Fantasy_Base_Metric_0to100",
+          "TE_Fantasy_Final_Metric_0to100",
+          "TE_Rookie_Draft_Metric_0to100",
+          "TE_Rookie_Athleticism_Metric_0to100",
+          "TE_Rookie_Role_Readiness_Metric_0to100",
+          "TE_Rookie_Context_Metric_0to100",
+          "TE_Rookie_Final_Metric_0to100"
+        ))
+      ),
+    by = c("Player", "TM", "WK")
+  ) %>%
+  dplyr::mutate(
+    Scrm_YDs = dplyr::coalesce(RecYDS_G, 0) + dplyr::coalesce(YDS_rush, 0),
+    Tot_TDs = dplyr::coalesce(TD, 0) + dplyr::coalesce(TD_rush, 0),
+    TE_Box_Fantasy_Target =
+      dplyr::coalesce(RecYDS_G, 0) * 0.10 +
+      dplyr::coalesce(YDS_rush, 0) * 0.10 +
+      6 * dplyr::coalesce(TD, 0) +
+      6 * dplyr::coalesce(TD_rush, 0),
+    TE_Fantasy_Target = dplyr::coalesce(fantasyPts, TE_Box_Fantasy_Target),
+    is_rookie = !is.na(SEA_num) & !is.na(rookie_year_num) & SEA_num == rookie_year_num
+  )
+
+# -------------------------------------------------------------------
+# 3) Build unified profile metrics
+# -------------------------------------------------------------------
+
+te_projection_eval$TE_Rookie_Target_Profile_Metric_0to100 <- build_weighted_metric(
+  te_projection_eval,
+  c(
+    TE_Rookie_Context_Metric_0to100 = 0.70,
+    TE_Rookie_Draft_Metric_0to100 = 0.20,
+    TE_Rookie_Role_Readiness_Metric_0to100 = 0.10
+  )
+)
+
+te_projection_eval$TE_Rookie_Yardage_Profile_Metric_0to100 <- build_weighted_metric(
+  te_projection_eval,
+  c(
+    TE_Rookie_Context_Metric_0to100 = 0.60,
+    TE_Rookie_Athleticism_Metric_0to100 = 0.25,
+    TE_Rookie_Draft_Metric_0to100 = 0.15
+  )
+)
+
+te_projection_eval$TE_Rookie_TD_Profile_Metric_0to100 <- build_weighted_metric(
+  te_projection_eval,
+  c(
+    TE_Rookie_Context_Metric_0to100 = 0.70,
+    TE_Rookie_Draft_Metric_0to100 = 0.20,
+    TE_Rookie_Role_Readiness_Metric_0to100 = 0.10
+  )
+)
+
+te_projection_eval$TE_Veteran_Yardage_Profile_Metric_0to100 <- build_weighted_metric(
+  te_projection_eval,
+  c(
+    TE_Target_Earning_Metric_0to100 = 0.30,
+    TE_Yardage_Efficiency_Metric_0to100 = 0.40,
+    TE_AirYards_Metric_0to100 = 0.15,
+    TE_YAC_Metric_0to100 = 0.15
+  )
+)
+
+te_projection_eval <- te_projection_eval %>%
+  dplyr::mutate(
+    TE_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(TE_Rookie_Final_Metric_0to100),
+      TE_Rookie_Final_Metric_0to100,
+      TE_Fantasy_Final_Metric_0to100
+    ),
+    TE_Target_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(TE_Rookie_Target_Profile_Metric_0to100),
+      TE_Rookie_Target_Profile_Metric_0to100,
+      TE_Target_Earning_Metric_0to100
+    ),
+    TE_Yardage_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(TE_Rookie_Yardage_Profile_Metric_0to100),
+      TE_Rookie_Yardage_Profile_Metric_0to100,
+      TE_Veteran_Yardage_Profile_Metric_0to100
+    ),
+    TE_TD_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(TE_Rookie_TD_Profile_Metric_0to100),
+      TE_Rookie_TD_Profile_Metric_0to100,
+      TE_TD_Conversion_Metric_0to100
+    ),
+    TE_Context_Profile_Metric_0to100 = TE_Matchup_Metric_0to100
+  )
+
+# -------------------------------------------------------------------
+# 4) Train / test split
+# -------------------------------------------------------------------
+
+te_train_projection <- te_projection_eval %>% dplyr::filter(WK <= 14)
+te_test_projection  <- te_projection_eval %>% dplyr::filter(WK > 14)
+
+# -------------------------------------------------------------------
+# 5) Target models
+# -------------------------------------------------------------------
+
+te_model_TGT_G <- fit_target_model(
+  te_train_projection, te_test_projection, te_projection_eval,
+  target = "TGT_G",
+  features = c(
+    "TE_Target_Profile_Metric_0to100",
+    "TE_Context_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+te_model_RecYDS_G <- fit_target_model(
+  te_train_projection, te_test_projection, te_projection_eval,
+  target = "RecYDS_G",
+  features = c(
+    "TE_Target_Profile_Metric_0to100",
+    "TE_Context_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+te_model_Tot_TDs <- fit_target_model(
+  te_train_projection, te_test_projection, te_projection_eval,
+  target = "Tot_TDs",
+  features = c(
+    "TE_TD_Profile_Metric_0to100",
+    "TE_Context_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+te_model_fantasy_direct <- fit_target_model(
+  te_train_projection, te_test_projection, te_projection_eval,
+  target = "TE_Fantasy_Target",
+  features = c("TE_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+te_projection_models <- list(
+  TGT_G = te_model_TGT_G,
+  RecYDS_G = te_model_RecYDS_G,
+  Tot_TDs = te_model_Tot_TDs,
+  TE_Fantasy_Target = te_model_fantasy_direct
+)
+
+te_projection_model_metrics <- dplyr::bind_rows(
+  lapply(te_projection_models, function(x) if (!is.null(x)) x$metrics)
+) %>%
+  dplyr::arrange(target)
+
+te_projection_model_vif <- dplyr::bind_rows(
+  lapply(te_projection_models, function(x) if (!is.null(x)) x$vif)
+) %>%
+  dplyr::arrange(target, dplyr::desc(vif))
+
+# -------------------------------------------------------------------
+# 6) Full-table predictions
+# -------------------------------------------------------------------
+
+if (!is.null(te_model_TGT_G)) {
+  te_projection_eval$TE_Proj_TGT_G <- te_model_TGT_G$pred_full
+}
+
+if (!is.null(te_model_RecYDS_G)) {
+  te_projection_eval$TE_Proj_RecYDS_G <- te_model_RecYDS_G$pred_full
+}
+
+if (!is.null(te_model_Tot_TDs)) {
+  te_projection_eval$TE_Proj_TotTDs <- te_model_Tot_TDs$pred_full
+}
+
+if (!is.null(te_model_fantasy_direct)) {
+  te_projection_eval$TE_Proj_FantasyPts <- te_model_fantasy_direct$pred_full
+}
+
+te_fantasy_projection_comparison <- if (!is.null(te_model_fantasy_direct)) {
+  te_model_fantasy_direct$metrics %>%
+    dplyr::mutate(model_name = "direct_profile") %>%
+    dplyr::select(target, model_name, features, n_train, n_test, rmse, mae, r2, correlation)
+} else {
+  tibble::tibble()
+}
+
+# -------------------------------------------------------------------
+# 7) Eval screens
+# -------------------------------------------------------------------
+
+te_projection_metric_cols <- c(
+  "TE_Profile_Metric_0to100",
+  "TE_Target_Profile_Metric_0to100",
+  "TE_Yardage_Profile_Metric_0to100",
+  "TE_TD_Profile_Metric_0to100",
+  "TE_Context_Profile_Metric_0to100",
+  "TE_History_Metric_0to100",
+  "TE_Target_Earning_Metric_0to100",
+  "TE_Yardage_Efficiency_Metric_0to100",
+  "TE_AirYards_Metric_0to100",
+  "TE_YAC_Metric_0to100",
+  "TE_TD_Conversion_Metric_0to100",
+  "TE_Team_Context_Metric_0to100",
+  "TE_Matchup_Metric_0to100",
+  "TE_Rookie_Draft_Metric_0to100",
+  "TE_Rookie_Athleticism_Metric_0to100",
+  "TE_Rookie_Role_Readiness_Metric_0to100",
+  "TE_Rookie_Context_Metric_0to100"
+)
+
+te_projection_metric_cols <- te_projection_metric_cols[te_projection_metric_cols %in% names(te_projection_eval)]
+
+te_projection_target_screen <- tibble::tibble(
+  metric = te_projection_metric_cols,
+  cor_to_fantasyPts = sapply(te_projection_metric_cols, function(col) safe_cor(te_projection_eval[[col]], te_projection_eval$TE_Fantasy_Target)),
+  cor_to_box_fantasy = sapply(te_projection_metric_cols, function(col) safe_cor(te_projection_eval[[col]], te_projection_eval$TE_Box_Fantasy_Target)),
+  cor_to_targets = sapply(te_projection_metric_cols, function(col) safe_cor(te_projection_eval[[col]], te_projection_eval$TGT_G)),
+  cor_to_rec_yds = sapply(te_projection_metric_cols, function(col) safe_cor(te_projection_eval[[col]], te_projection_eval$RecYDS_G)),
+  cor_to_tot_tds = sapply(te_projection_metric_cols, function(col) safe_cor(te_projection_eval[[col]], te_projection_eval$Tot_TDs))
+) %>%
+  dplyr::arrange(dplyr::desc(cor_to_fantasyPts))
+
+te_eval_split_summary <- tibble::tibble(
+  cohort = c("all_rows", "rookies", "non_rookies"),
+  cor_profile_to_fantasy = c(
+    safe_cor(te_projection_eval$TE_Profile_Metric_0to100, te_projection_eval$TE_Fantasy_Target),
+    safe_cor(te_projection_eval$TE_Profile_Metric_0to100[te_projection_eval$is_rookie], te_projection_eval$TE_Fantasy_Target[te_projection_eval$is_rookie]),
+    safe_cor(te_projection_eval$TE_Profile_Metric_0to100[!te_projection_eval$is_rookie], te_projection_eval$TE_Fantasy_Target[!te_projection_eval$is_rookie])
+  ),
+  cor_profile_to_box = c(
+    safe_cor(te_projection_eval$TE_Profile_Metric_0to100, te_projection_eval$TE_Box_Fantasy_Target),
+    safe_cor(te_projection_eval$TE_Profile_Metric_0to100[te_projection_eval$is_rookie], te_projection_eval$TE_Box_Fantasy_Target[te_projection_eval$is_rookie]),
+    safe_cor(te_projection_eval$TE_Profile_Metric_0to100[!te_projection_eval$is_rookie], te_projection_eval$TE_Box_Fantasy_Target[!te_projection_eval$is_rookie])
+  )
+)
+
+# -------------------------------------------------------------------
+# 8) Review table
+# -------------------------------------------------------------------
+
+te_projection_summary_final <- te_projection_eval %>%
+  dplyr::select(
+    Player, TM, WK, is_rookie,
+    TE_Fantasy_Target,
+    TE_Box_Fantasy_Target,
+    TGT_G,
+    RecYDS_G,
+    Scrm_YDs,
+    Tot_TDs,
+    TE_Profile_Metric_0to100,
+    TE_Proj_TGT_G,
+    TE_Proj_RecYDS_G,
+    TE_Proj_TotTDs,
+    TE_Proj_FantasyPts
+  ) %>%
+  dplyr::arrange(WK, dplyr::desc(TE_Proj_FantasyPts))
+
 
 #Ks week 1
 K_adv_21_wk1 <- read.csv("~/NFLfastR/2021 Data/k 21 wk 1.csv")|>
@@ -30596,7 +31929,7 @@ K_sch_21 <- K_sch_21|>
   select(Player:TM_DEF,Draft_Day,rookie_year,Ht:avg_total_wind_def)|>
   mutate(K_Depth_Role = factor(ifelse(depth_team == 1,"Starter 1",
                                        ifelse(depth_team == 2, "Starter 2",
-                                              ifelse(depth_team == 3, "3rd TE",
+                                              ifelse(depth_team == 3, "3rd K",
                                                      ifelse(depth_team == 4,"Bench",NA)))), levels = c("Starter 1","Starter 2","3rd TE","Bench")))|>
   select(Player:depth_team,K_Depth_Role,TM_DEF:avg_total_wind_def)
 #avg k stats
@@ -30645,26 +31978,1260 @@ k_21 <- k_21_avg|>
 
 K_sch_21 <- k_21
 
-Team_schedule_matchups_21_avg <- Team_schedule_matchups_21|>
-  select(Name:SEA,Head_Coach,HC_pace_Role_avg:avg_total_wind_off,Name_DEF,TM_DEF,Head_Coach_DEF,G_total_off:avg_total_wind_def)
-Team_schedule_matchups_21_unique <- Team_schedule_matchups_21_avg %>%
+Team_schedule_matchups_21_avg <- Team_schedule_matchups_21 |>
+  select(
+    Name:SEA,
+    Head_Coach,
+    HC_pace_Role_avg:avg_total_wind_off,
+    Name_DEF,
+    TM_DEF,
+    Head_Coach_DEF,
+    G_total_off:avg_total_wind_def
+  )
+
+team_matchups_21_off_avg <- Team_schedule_matchups_21_avg %>%
+  select(TM, Name, Head_Coach, HC_pace_Role_avg:avg_total_wind_off) %>%
   distinct(TM, .keep_all = TRUE)
-k_21_avg <- k_21_avg %>%
-  distinct(Player, .keep_all = TRUE)
-k_sch_21_avg <- k_21_avg|>
-  left_join(Team_schedule_matchups_21_unique,by = c("TM"))|>
-  rename(SEA = SEA.x,TM_DEF = TM_DEF.x,G = G.x)|>
-  select(-SEA.y,-TM_DEF.y,-G.y)
 
-k_data_clean <- k_sch_21_avg %>%
-  select(-any_of(c("WK", "SEA","TM_DEF")))
+team_matchups_21_def_avg <- Team_schedule_matchups_21_avg %>%
+  select(TM_DEF, Name_DEF, Head_Coach_DEF, G_total_off:avg_total_wind_def) %>%
+  distinct(TM_DEF, .keep_all = TRUE)
+
+k_21_base <- k_21 %>%
+  distinct(Player, TM, SEA, .keep_all = TRUE)
+
+k_data_clean <- k_21_base %>%
+  left_join(team_matchups_21_off_avg, by = "TM") %>%
+  select(-any_of(c("WK", "TM_DEF", "gameday", "gametime", "weekday")))
+
 k_sch_21_avg <- schedule_21 %>%
-  inner_join(k_data_clean, by = "TM")
+  filter(!is.na(WK), WK <= 18) %>%
+  inner_join(k_data_clean, by = c("TM", "SEA")) %>%
+  left_join(team_matchups_21_def_avg, by = "TM_DEF") %>%
+  (\(df) {
+    if ("G_total_off.x" %in% names(df)) {
+      df$G_total_off <- dplyr::coalesce(df$G_total_off.x, df$G_total_off.y)
+    }
+    df
+  })() %>%
+  select(-dplyr::any_of(c("G_total_off.x", "G_total_off.y"))) %>%
+  select(
+    Player,
+    age,
+    TM,
+    SEA,
+    WK,
+    gameday,
+    weekday,
+    gametime,
+    POS,
+    dplyr::any_of("G"),
+    G_total_off,
+    TM_DEF,
+    depth_team,
+    K_Depth_Role,
+    Draft_Day,
+    rookie_year,
+    Ht,
+    Wt,
+    forty,
+    bench,
+    vertical,
+    broad_jump,
+    cone,
+    shuttle,
+    report_status:avg_total_wind_def,
+    away_score:stadium
+  )
+k_sch_21_avg <- k_sch_21_avg %>%
+  select(-dplyr::any_of(c("gameday_def", "weekday_def", "gametime_def")))
+# -------------------- K veteran console retest block --------------------
+# Console only. Do not paste into the permanent script yet.
 
-k_sch_21_avg <- k_sch_21_avg|>
-  rename(G_total_off = G_total_off.x)|>
-  select(-G_total_off.y)|>
-  select(Player:age,TM:WK,POS,G,G_total_off,TM_DEF,depth_team,K_Depth_Role,Draft_Day:shuttle,report_status:avg_total_wind_def,away_score:stadium)  
+if (!exists("safe_cor")) {
+  safe_cor <- function(x, y) {
+    x <- suppressWarnings(as.numeric(x))
+    y <- suppressWarnings(as.numeric(y))
+    
+    if (all(is.na(x)) || all(is.na(y))) return(NA_real_)
+    if (sd(x, na.rm = TRUE) == 0 || sd(y, na.rm = TRUE) == 0) return(NA_real_)
+    
+    cor(x, y, use = "pairwise.complete.obs")
+  }
+}
+
+if (!exists("rescale_0_100")) {
+  rescale_0_100 <- function(x) {
+    rng <- range(x, na.rm = TRUE)
+    if (!all(is.finite(rng)) || diff(rng) == 0) return(rep(50, length(x)))
+    (x - rng[1]) / diff(rng) * 100
+  }
+}
+
+if (!exists("pct_score")) {
+  pct_score <- function(x, inverse = FALSE) {
+    x_num <- suppressWarnings(as.numeric(x))
+    out <- dplyr::percent_rank(x_num) * 100
+    
+    default_val <- median(out, na.rm = TRUE)
+    if (!is.finite(default_val)) default_val <- 50
+    
+    out[is.na(out)] <- default_val
+    if (inverse) out <- 100 - out
+    
+    as.numeric(out)
+  }
+}
+
+if (!exists("role_score_from_target")) {
+  role_score_from_target <- function(role_vec, target_vec) {
+    d <- tibble::tibble(
+      role = as.character(role_vec),
+      target = suppressWarnings(as.numeric(target_vec))
+    ) %>%
+      dplyr::filter(!is.na(role), !is.na(target))
+    
+    if (nrow(d) == 0) return(rep(50, length(role_vec)))
+    
+    level_means <- d %>%
+      dplyr::group_by(role) %>%
+      dplyr::summarise(mean_target = mean(target, na.rm = TRUE), .groups = "drop")
+    
+    level_means$score_0to100 <- rescale_0_100(level_means$mean_target)
+    
+    score_map <- setNames(level_means$score_0to100, level_means$role)
+    out <- unname(score_map[as.character(role_vec)])
+    
+    default_val <- mean(level_means$score_0to100, na.rm = TRUE)
+    if (!is.finite(default_val)) default_val <- 50
+    
+    out[is.na(out)] <- default_val
+    as.numeric(out)
+  }
+}
+
+if (!exists("row_weighted_mean")) {
+  row_weighted_mean <- function(df, weights) {
+    mat <- as.matrix(df)
+    weights <- as.numeric(weights)
+    
+    num <- rowSums(sweep(mat, 2, weights, `*`), na.rm = TRUE)
+    den <- rowSums((!is.na(mat)) * matrix(weights, nrow = nrow(mat), ncol = ncol(mat), byrow = TRUE))
+    
+    ifelse(den == 0, NA_real_, num / den)
+  }
+}
+
+if (!exists("build_group_score")) {
+  build_group_score <- function(data, score_cols, target_col = "FP") {
+    score_cols <- intersect(score_cols, names(data))
+    
+    if (length(score_cols) == 0) {
+      return(rep(NA_real_, nrow(data)))
+    }
+    
+    w <- sapply(score_cols, function(col) abs(safe_cor(data[[col]], data[[target_col]])))
+    w[is.na(w)] <- 0
+    
+    if (sum(w) == 0) w[] <- 1
+    w <- w / sum(w)
+    
+    row_weighted_mean(data[, score_cols, drop = FALSE], w)
+  }
+}
+
+if (!exists("build_weighted_metric")) {
+  build_weighted_metric <- function(data, weight_map) {
+    keep_cols <- names(weight_map)[names(weight_map) %in% names(data)]
+    
+    if (length(keep_cols) == 0) {
+      return(rep(NA_real_, nrow(data)))
+    }
+    
+    w <- weight_map[keep_cols]
+    w <- w / sum(w)
+    
+    row_weighted_mean(data[, keep_cols, drop = FALSE], w)
+  }
+}
+
+k_build_group_score <- function(df, cols, target_col) {
+  cols <- intersect(cols, names(df))
+  if (length(cols) == 0) return(rep(NA_real_, nrow(df)))
+  build_group_score(df, cols, target_col)
+}
+
+k_pick_numeric <- function(df, choices) {
+  choices <- choices[choices %in% names(df)]
+  if (length(choices) == 0) return(rep(NA_real_, nrow(df)))
+  
+  out <- suppressWarnings(as.numeric(df[[choices[1]]]))
+  if (length(choices) > 1) {
+    for (col in choices[-1]) {
+      out <- dplyr::coalesce(out, suppressWarnings(as.numeric(df[[col]])))
+    }
+  }
+  out
+}
+
+# -------------------- K final veteran metric block --------------------
+# Main output table: k_sch_21_avg
+# Official veteran K score uses the direct-defense matchup winner:
+# K_Fantasy_DirectMatchupHeavy_v7_Metric_0to100
+
+k_pick_numeric <- function(df, choices) {
+  choices <- choices[choices %in% names(df)]
+  if (length(choices) == 0) return(rep(NA_real_, nrow(df)))
+  
+  out <- suppressWarnings(as.numeric(df[[choices[1]]]))
+  if (length(choices) > 1) {
+    for (col in choices[-1]) {
+      out <- dplyr::coalesce(out, suppressWarnings(as.numeric(df[[col]])))
+    }
+  }
+  out
+}
+
+k_build_group_score <- function(df, cols, target_col) {
+  cols <- intersect(cols, names(df))
+  if (length(cols) == 0) return(rep(NA_real_, nrow(df)))
+  build_group_score(df, cols, target_col)
+}
+
+# -------------------------------------------------------------------
+# 1) Build veteran eval table
+# -------------------------------------------------------------------
+
+k_metric_targets_21 <- K_sch_21 %>%
+  dplyr::mutate(
+    WK = suppressWarnings(as.integer(WK)),
+    fantasyPts_k = k_pick_numeric(., c("fantasyPts_ply", "fantasyPts"))
+  ) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM, WK, dplyr::desc(fantasyPts_k)) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::select(
+    Player, TM, WK,
+    dplyr::any_of(c(
+      "fantasyPts_ply", "fantasyPts",
+      "FGA_ply", "FGA",
+      "FGM_ply", "FGM",
+      "FG_pct_ply", "FG_pct",
+      "complete19_ply", "complete19",
+      "attempt19_ply", "attempt19",
+      "pct19_ply", "pct19",
+      "complete29_ply", "complete29",
+      "attempt29_ply", "attempt29",
+      "pct29_ply", "pct29",
+      "complete39_ply", "complete39",
+      "attempt39_ply", "attempt39",
+      "pct39_ply", "pct39",
+      "complete49_ply", "complete49",
+      "attempt49_ply", "attempt49",
+      "pct49_ply", "pct49",
+      "complete50_ply", "complete50",
+      "attempt50_ply", "attempt50",
+      "pct50_ply", "pct50",
+      "epsMade_ply", "epsMade",
+      "epsAttempt_ply", "epsAttempt",
+      "epsPct_ply", "epsPct"
+    ))
+  ) %>%
+  dplyr::rename_with(
+    .fn = ~ paste0(.x, "_week"),
+    .cols = -c(Player, TM, WK)
+  )
+
+k_metric_df <- k_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM, WK) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::left_join(k_metric_targets_21, by = c("Player", "TM", "WK")) %>%
+  dplyr::mutate(
+    avg_total_fantasyPts = k_pick_numeric(., c("avg_total_fantasyPts_ply", "avg_total_fantasyPts")),
+    avg_total_FGA = k_pick_numeric(., c("avg_total_FGA_ply", "avg_total_FGA")),
+    avg_total_FGM = k_pick_numeric(., c("avg_total_FGM_ply", "avg_total_FGM")),
+    avg_total_FG_pct = k_pick_numeric(., c("avg_total_FG_pct_ply", "avg_total_FG_pct")),
+    avg_total_complete19 = k_pick_numeric(., c("avg_total_complete19_ply", "avg_total_complete19")),
+    avg_total_attempt19 = k_pick_numeric(., c("avg_total_attempt19_ply", "avg_total_attempt19")),
+    avg_total_pct19 = k_pick_numeric(., c("avg_total_pct19_ply", "avg_total_pct19")),
+    avg_total_complete29 = k_pick_numeric(., c("avg_total_complete29_ply", "avg_total_complete29")),
+    avg_total_attempt29 = k_pick_numeric(., c("avg_total_attempt29_ply", "avg_total_attempt29")),
+    avg_total_pct29 = k_pick_numeric(., c("avg_total_pct29_ply", "avg_total_pct29")),
+    avg_total_complete39 = k_pick_numeric(., c("avg_total_complete39_ply", "avg_total_complete39")),
+    avg_total_attempt39 = k_pick_numeric(., c("avg_total_attempt39_ply", "avg_total_attempt39")),
+    avg_total_pct39 = k_pick_numeric(., c("avg_total_pct39_ply", "avg_total_pct39")),
+    avg_total_complete49 = k_pick_numeric(., c("avg_total_complete49_ply", "avg_total_complete49")),
+    avg_total_attempt49 = k_pick_numeric(., c("avg_total_attempt49_ply", "avg_total_attempt49")),
+    avg_total_pct49 = k_pick_numeric(., c("avg_total_pct49_ply", "avg_total_pct49")),
+    avg_total_complete50 = k_pick_numeric(., c("avg_total_complete50_ply", "avg_total_complete50")),
+    avg_total_attempt50 = k_pick_numeric(., c("avg_total_attempt50_ply", "avg_total_attempt50")),
+    avg_total_pct50 = k_pick_numeric(., c("avg_total_pct50_ply", "avg_total_pct50")),
+    avg_total_epsMade = k_pick_numeric(., c("avg_total_epsMade_ply", "avg_total_epsMade")),
+    avg_total_epsAttempt = k_pick_numeric(., c("avg_total_epsAttempt_ply", "avg_total_epsAttempt")),
+    avg_total_epsPct = k_pick_numeric(., c("avg_total_epsPct_ply", "avg_total_epsPct")),
+    
+    fantasyPts_week = k_pick_numeric(., c("fantasyPts_ply_week", "fantasyPts_week")),
+    FGA_week = k_pick_numeric(., c("FGA_ply_week", "FGA_week")),
+    FGM_week = k_pick_numeric(., c("FGM_ply_week", "FGM_week")),
+    FG_pct_week = k_pick_numeric(., c("FG_pct_ply_week", "FG_pct_week")),
+    complete19_week = k_pick_numeric(., c("complete19_ply_week", "complete19_week")),
+    attempt19_week = k_pick_numeric(., c("attempt19_ply_week", "attempt19_week")),
+    pct19_week = k_pick_numeric(., c("pct19_ply_week", "pct19_week")),
+    complete29_week = k_pick_numeric(., c("complete29_ply_week", "complete29_week")),
+    attempt29_week = k_pick_numeric(., c("attempt29_ply_week", "attempt29_week")),
+    pct29_week = k_pick_numeric(., c("pct29_ply_week", "pct29_week")),
+    complete39_week = k_pick_numeric(., c("complete39_ply_week", "complete39_week")),
+    attempt39_week = k_pick_numeric(., c("attempt39_ply_week", "attempt39_week")),
+    pct39_week = k_pick_numeric(., c("pct39_ply_week", "pct39_week")),
+    complete49_week = k_pick_numeric(., c("complete49_ply_week", "complete49_week")),
+    attempt49_week = k_pick_numeric(., c("attempt49_ply_week", "attempt49_week")),
+    pct49_week = k_pick_numeric(., c("pct49_ply_week", "pct49_week")),
+    complete50_week = k_pick_numeric(., c("complete50_ply_week", "complete50_week")),
+    attempt50_week = k_pick_numeric(., c("attempt50_ply_week", "attempt50_week")),
+    pct50_week = k_pick_numeric(., c("pct50_ply_week", "pct50_week")),
+    epsMade_week = k_pick_numeric(., c("epsMade_ply_week", "epsMade_week")),
+    epsAttempt_week = k_pick_numeric(., c("epsAttempt_ply_week", "epsAttempt_week")),
+    epsPct_week = k_pick_numeric(., c("epsPct_ply_week", "epsPct_week")),
+    
+    Long_FGM_week = dplyr::coalesce(complete39_week, 0) + dplyr::coalesce(complete49_week, 0) + dplyr::coalesce(complete50_week, 0),
+    XP_Made_week = dplyr::coalesce(epsMade_week, 0),
+    K_Box_Fantasy_Target =
+      3 * dplyr::coalesce(complete19_week, 0) +
+      3 * dplyr::coalesce(complete29_week, 0) +
+      3 * dplyr::coalesce(complete39_week, 0) +
+      4 * dplyr::coalesce(complete49_week, 0) +
+      5 * dplyr::coalesce(complete50_week, 0) +
+      XP_Made_week,
+    K_Fantasy_Target = dplyr::coalesce(fantasyPts_week, K_Box_Fantasy_Target)
+  ) %>%
+  dplyr::filter(!is.na(fantasyPts_week))
+
+# -------------------------------------------------------------------
+# 2) Score veteran K inputs
+# -------------------------------------------------------------------
+
+k_positive_numeric_features <- intersect(
+  c(
+    "avg_total_fantasyPts",
+    "avg_total_FGA",
+    "avg_total_FGM",
+    "avg_total_FG_pct",
+    "avg_total_complete19",
+    "avg_total_attempt19",
+    "avg_total_pct19",
+    "avg_total_complete29",
+    "avg_total_attempt29",
+    "avg_total_pct29",
+    "avg_total_complete39",
+    "avg_total_attempt39",
+    "avg_total_pct39",
+    "avg_total_complete49",
+    "avg_total_attempt49",
+    "avg_total_pct49",
+    "avg_total_complete50",
+    "avg_total_attempt50",
+    "avg_total_pct50",
+    "avg_total_epsMade",
+    "avg_total_epsAttempt",
+    "avg_total_epsPct",
+    "avg_total_Pts_scr",
+    "avg_total_RZ_opp",
+    "avg_total_total_plys_off",
+    "avg_total_PTs_allw",
+    "avg_total_RZ_opp_Allw",
+    "avg_total_FGA_DEF",
+    "avg_total_FGM_DEF"
+  ),
+  names(k_metric_df)
+)
+
+k_role_features <- intersect(
+  c(
+    "K_Depth_Role",
+    "HC_FGA_Role_avg",
+    "Team_RZ_Role_avg",
+    "Team_RZ_Pass_Run_Role_avg",
+    "Team_Pts_scr_Role_avg",
+    "HC_FGA_DEF_Role_avg",
+    "Team_RZ_DEF_Role_avg",
+    "Team_RZ_Pass_Run_DEF_Role_avg",
+    "Team_Pts_Allw_Role_avg",
+    "Team_PTs_allw_Role_avg"
+  ),
+  names(k_metric_df)
+)
+
+for (col in k_positive_numeric_features) {
+  k_metric_df[[paste0("score_", col)]] <- pct_score(k_metric_df[[col]], inverse = FALSE)
+}
+
+for (col in k_role_features) {
+  k_metric_df[[paste0("score_", col)]] <- role_score_from_target(
+    k_metric_df[[col]],
+    k_metric_df$K_Fantasy_Target
+  )
+}
+
+# -------------------------------------------------------------------
+# 3) Veteran K sub-metrics
+# -------------------------------------------------------------------
+
+k_metric_df$K_History_Metric_0to100 <- k_build_group_score(
+  k_metric_df,
+  c(
+    "score_avg_total_fantasyPts",
+    "score_avg_total_FGM",
+    "score_avg_total_epsMade"
+  ),
+  "K_Fantasy_Target"
+)
+
+k_metric_df$K_Opportunity_Metric_0to100 <- k_build_group_score(
+  k_metric_df,
+  c(
+    "score_avg_total_FGA",
+    "score_avg_total_attempt39",
+    "score_avg_total_attempt49",
+    "score_avg_total_attempt50",
+    "score_avg_total_epsAttempt"
+  ),
+  "K_Fantasy_Target"
+)
+
+k_metric_df$K_Accuracy_Metric_0to100 <- k_build_group_score(
+  k_metric_df,
+  c(
+    "score_avg_total_FG_pct",
+    "score_avg_total_pct19",
+    "score_avg_total_pct29",
+    "score_avg_total_pct39",
+    "score_avg_total_pct49",
+    "score_avg_total_pct50",
+    "score_avg_total_epsPct"
+  ),
+  "K_Fantasy_Target"
+)
+
+k_metric_df$K_Range_Metric_0to100 <- k_build_group_score(
+  k_metric_df,
+  c(
+    "score_avg_total_complete39",
+    "score_avg_total_complete49",
+    "score_avg_total_complete50",
+    "score_avg_total_attempt39",
+    "score_avg_total_attempt49",
+    "score_avg_total_attempt50"
+  ),
+  "K_Fantasy_Target"
+)
+
+k_metric_df$K_Team_Context_Metric_0to100 <- k_build_group_score(
+  k_metric_df,
+  c(
+    "score_avg_total_Pts_scr",
+    "score_avg_total_RZ_opp",
+    "score_avg_total_total_plys_off",
+    "score_HC_FGA_Role_avg",
+    "score_Team_RZ_Role_avg",
+    "score_Team_RZ_Pass_Run_Role_avg",
+    "score_Team_Pts_scr_Role_avg"
+  ),
+  "K_Fantasy_Target"
+)
+
+k_metric_df$K_Matchup_Metric_0to100 <- k_build_group_score(
+  k_metric_df,
+  c(
+    "score_avg_total_PTs_allw",
+    "score_avg_total_RZ_opp_Allw",
+    "score_HC_FGA_DEF_Role_avg",
+    "score_Team_RZ_DEF_Role_avg",
+    "score_Team_RZ_Pass_Run_DEF_Role_avg",
+    "score_Team_Pts_Allw_Role_avg",
+    "score_Team_PTs_allw_Role_avg"
+  ),
+  "K_Fantasy_Target"
+)
+
+k_metric_df$K_Matchup_DirectFGA_v2_Metric_0to100 <- k_build_group_score(
+  k_metric_df,
+  c(
+    "score_avg_total_FGA_DEF",
+    "score_avg_total_FGM_DEF",
+    "score_avg_total_PTs_allw",
+    "score_avg_total_RZ_opp_Allw",
+    "score_HC_FGA_DEF_Role_avg",
+    "score_Team_RZ_DEF_Role_avg",
+    "score_Team_RZ_Pass_Run_DEF_Role_avg",
+    "score_Team_Pts_Allw_Role_avg",
+    "score_Team_PTs_allw_Role_avg"
+  ),
+  "K_Fantasy_Target"
+)
+
+# -------------------------------------------------------------------
+# 4) Official veteran K fantasy metric
+# Direct-defense matchup winner
+# -------------------------------------------------------------------
+
+k_metric_df$K_Fantasy_Final_Metric_0to100 <- build_weighted_metric(
+  k_metric_df,
+  c(
+    K_History_Metric_0to100 = 0.15,
+    K_Opportunity_Metric_0to100 = 0.20,
+    K_Accuracy_Metric_0to100 = 0.15,
+    K_Range_Metric_0to100 = 0.05,
+    K_Team_Context_Metric_0to100 = 0.15,
+    K_Matchup_DirectFGA_v2_Metric_0to100 = 0.30
+  )
+)
+
+k_metric_df$K_Fantasy_Final_Grade <- grade_from_score(
+  k_metric_df$K_Fantasy_Final_Metric_0to100
+)
+
+# -------------------------------------------------------------------
+# 5) Store veteran K columns on k_sch_21_avg
+# -------------------------------------------------------------------
+
+k_veteran_cols_to_store <- c(
+  "K_History_Metric_0to100",
+  "K_Opportunity_Metric_0to100",
+  "K_Accuracy_Metric_0to100",
+  "K_Range_Metric_0to100",
+  "K_Team_Context_Metric_0to100",
+  "K_Matchup_Metric_0to100",
+  "K_Matchup_DirectFGA_v2_Metric_0to100",
+  "K_Fantasy_Final_Metric_0to100",
+  "K_Fantasy_Final_Grade"
+)
+
+k_sch_21_avg <- k_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::select(-dplyr::any_of(k_veteran_cols_to_store)) %>%
+  dplyr::left_join(
+    k_metric_df %>%
+      dplyr::select(Player, TM, WK, dplyr::any_of(k_veteran_cols_to_store)) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE),
+    by = c("Player", "TM", "WK")
+  )
+
+# -------------------------------------------------------------------
+# 6) Optional review table
+# -------------------------------------------------------------------
+
+k_metric_summary_final <- k_metric_df %>%
+  dplyr::select(
+    Player, TM, WK,
+    K_Fantasy_Target,
+    K_Box_Fantasy_Target,
+    FGA_week,
+    FGM_week,
+    FG_pct_week,
+    Long_FGM_week,
+    XP_Made_week,
+    K_History_Metric_0to100,
+    K_Opportunity_Metric_0to100,
+    K_Accuracy_Metric_0to100,
+    K_Range_Metric_0to100,
+    K_Team_Context_Metric_0to100,
+    K_Matchup_Metric_0to100,
+    K_Matchup_DirectFGA_v2_Metric_0to100,
+    K_Fantasy_Final_Metric_0to100,
+    K_Fantasy_Final_Grade
+  ) %>%
+  dplyr::arrange(WK, dplyr::desc(K_Fantasy_Final_Metric_0to100))
+
+# -------------------- K final rookie metric block --------------------
+# Main output table: k_sch_21_avg
+# Rookie filter: SEA == rookie_year
+# Official rookie K score uses the draft metric directly because the
+# other rookie K components did not hold usable signal in the retest.
+
+k_rookie_build_group_score <- function(df, cols, target_col) {
+  cols <- intersect(cols, names(df))
+  if (length(cols) == 0) return(rep(NA_real_, nrow(df)))
+  build_group_score(df, cols, target_col)
+}
+
+# -------------------------------------------------------------------
+# 1) Build rookie eval table
+# -------------------------------------------------------------------
+
+k_rookie_targets_21 <- K_sch_21 %>%
+  dplyr::mutate(
+    WK = suppressWarnings(as.integer(WK)),
+    SEA_num = suppressWarnings(as.integer(as.character(SEA))),
+    rookie_year_num = suppressWarnings(as.integer(as.character(rookie_year))),
+    fantasyPts_k = k_pick_numeric(., c("fantasyPts_ply", "fantasyPts"))
+  ) %>%
+  dplyr::filter(
+    !is.na(WK),
+    WK <= 18,
+    !is.na(SEA_num),
+    !is.na(rookie_year_num),
+    SEA_num == rookie_year_num
+  ) %>%
+  dplyr::arrange(Player, TM, WK, dplyr::desc(fantasyPts_k)) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::select(
+    Player, TM, WK,
+    dplyr::any_of(c(
+      "fantasyPts_ply", "fantasyPts",
+      "FGA_ply", "FGA",
+      "FGM_ply", "FGM",
+      "FG_pct_ply", "FG_pct",
+      "complete19_ply", "complete19",
+      "complete29_ply", "complete29",
+      "complete39_ply", "complete39",
+      "complete49_ply", "complete49",
+      "complete50_ply", "complete50",
+      "epsMade_ply", "epsMade"
+    ))
+  ) %>%
+  dplyr::rename_with(
+    .fn = ~ paste0(.x, "_week"),
+    .cols = -c(Player, TM, WK)
+  )
+
+k_rookie_df <- k_sch_21_avg %>%
+  dplyr::mutate(
+    WK = suppressWarnings(as.integer(WK)),
+    SEA_num = suppressWarnings(as.integer(as.character(SEA))),
+    rookie_year_num = suppressWarnings(as.integer(as.character(rookie_year)))
+  ) %>%
+  dplyr::filter(
+    !is.na(WK),
+    WK <= 18,
+    !is.na(SEA_num),
+    !is.na(rookie_year_num),
+    SEA_num == rookie_year_num
+  ) %>%
+  dplyr::arrange(Player, TM, WK) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::left_join(k_rookie_targets_21, by = c("Player", "TM", "WK")) %>%
+  dplyr::mutate(
+    fantasyPts_week = k_pick_numeric(., c("fantasyPts_ply_week", "fantasyPts_week")),
+    FGA_week = k_pick_numeric(., c("FGA_ply_week", "FGA_week")),
+    FGM_week = k_pick_numeric(., c("FGM_ply_week", "FGM_week")),
+    FG_pct_week = k_pick_numeric(., c("FG_pct_ply_week", "FG_pct_week")),
+    complete19_week = k_pick_numeric(., c("complete19_ply_week", "complete19_week")),
+    complete29_week = k_pick_numeric(., c("complete29_ply_week", "complete29_week")),
+    complete39_week = k_pick_numeric(., c("complete39_ply_week", "complete39_week")),
+    complete49_week = k_pick_numeric(., c("complete49_ply_week", "complete49_week")),
+    complete50_week = k_pick_numeric(., c("complete50_ply_week", "complete50_week")),
+    epsMade_week = k_pick_numeric(., c("epsMade_ply_week", "epsMade_week")),
+    Long_FGM_week = dplyr::coalesce(complete39_week, 0) + dplyr::coalesce(complete49_week, 0) + dplyr::coalesce(complete50_week, 0),
+    XP_Made_week = dplyr::coalesce(epsMade_week, 0),
+    K_Box_Fantasy_Target =
+      3 * dplyr::coalesce(complete19_week, 0) +
+      3 * dplyr::coalesce(complete29_week, 0) +
+      3 * dplyr::coalesce(complete39_week, 0) +
+      4 * dplyr::coalesce(complete49_week, 0) +
+      5 * dplyr::coalesce(complete50_week, 0) +
+      XP_Made_week,
+    K_Rookie_Fantasy_Target = dplyr::coalesce(fantasyPts_week, K_Box_Fantasy_Target)
+  ) %>%
+  dplyr::filter(!is.na(fantasyPts_week))
+
+# -------------------------------------------------------------------
+# 2) Score rookie K inputs
+# -------------------------------------------------------------------
+
+k_rookie_positive_numeric_features <- intersect(
+  c(
+    "Ht",
+    "Wt",
+    "bench",
+    "vertical",
+    "broad_jump"
+  ),
+  names(k_rookie_df)
+)
+
+k_rookie_inverse_numeric_features <- intersect(
+  c(
+    "age",
+    "round",
+    "pick",
+    "forty",
+    "cone",
+    "shuttle"
+  ),
+  names(k_rookie_df)
+)
+
+k_rookie_role_features <- intersect(
+  c(
+    "Draft_Day",
+    "K_Depth_Role",
+    "depth_team",
+    "report_status",
+    "practice_status"
+  ),
+  names(k_rookie_df)
+)
+
+for (col in k_rookie_positive_numeric_features) {
+  k_rookie_df[[paste0("score_", col)]] <- pct_score(k_rookie_df[[col]], inverse = FALSE)
+}
+
+for (col in k_rookie_inverse_numeric_features) {
+  k_rookie_df[[paste0("score_", col)]] <- pct_score(k_rookie_df[[col]], inverse = TRUE)
+}
+
+for (col in k_rookie_role_features) {
+  k_rookie_df[[paste0("score_", col)]] <- role_score_from_target(
+    k_rookie_df[[col]],
+    k_rookie_df$K_Rookie_Fantasy_Target
+  )
+}
+
+# -------------------------------------------------------------------
+# 3) Rookie K sub-metrics
+# -------------------------------------------------------------------
+
+k_rookie_df$K_Rookie_Draft_Metric_0to100 <- k_rookie_build_group_score(
+  k_rookie_df,
+  c(
+    "score_Draft_Day",
+    "score_age",
+    "score_round",
+    "score_pick"
+  ),
+  "K_Rookie_Fantasy_Target"
+)
+
+k_rookie_df$K_Rookie_Athleticism_Metric_0to100 <- k_rookie_build_group_score(
+  k_rookie_df,
+  c(
+    "score_Ht",
+    "score_Wt",
+    "score_forty",
+    "score_bench",
+    "score_vertical",
+    "score_broad_jump",
+    "score_cone",
+    "score_shuttle"
+  ),
+  "K_Rookie_Fantasy_Target"
+)
+
+k_rookie_df$K_Rookie_Role_Readiness_Metric_0to100 <- k_rookie_build_group_score(
+  k_rookie_df,
+  c(
+    "score_K_Depth_Role",
+    "score_depth_team",
+    "score_report_status",
+    "score_practice_status"
+  ),
+  "K_Rookie_Fantasy_Target"
+)
+
+k_rookie_df$K_Rookie_Context_Metric_0to100 <- build_weighted_metric(
+  k_rookie_df,
+  c(
+    K_Team_Context_Metric_0to100 = 0.60,
+    K_Matchup_Metric_0to100 = 0.40
+  )
+)
+
+# -------------------------------------------------------------------
+# 4) Official rookie K fantasy metric
+# Direct draft score winner
+# -------------------------------------------------------------------
+
+k_rookie_df$K_Rookie_Final_Metric_0to100 <- k_rookie_df$K_Rookie_Draft_Metric_0to100
+
+k_rookie_df$K_Rookie_Final_Grade <- grade_from_score(
+  k_rookie_df$K_Rookie_Final_Metric_0to100
+)
+
+# -------------------------------------------------------------------
+# 5) Store rookie K columns on k_sch_21_avg
+# -------------------------------------------------------------------
+
+k_rookie_cols_to_store <- c(
+  "K_Rookie_Draft_Metric_0to100",
+  "K_Rookie_Athleticism_Metric_0to100",
+  "K_Rookie_Role_Readiness_Metric_0to100",
+  "K_Rookie_Context_Metric_0to100",
+  "K_Rookie_Final_Metric_0to100",
+  "K_Rookie_Final_Grade"
+)
+
+k_sch_21_avg <- k_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::select(-dplyr::any_of(k_rookie_cols_to_store)) %>%
+  dplyr::left_join(
+    k_rookie_df %>%
+      dplyr::select(Player, TM, WK, dplyr::any_of(k_rookie_cols_to_store)) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE),
+    by = c("Player", "TM", "WK")
+  )
+
+# -------------------------------------------------------------------
+# 6) Optional review table
+# -------------------------------------------------------------------
+
+k_rookie_summary_final <- k_rookie_df %>%
+  dplyr::select(
+    Player, TM, WK,
+    K_Rookie_Fantasy_Target,
+    K_Box_Fantasy_Target,
+    dplyr::any_of(c(
+      "round",
+      "pick",
+      "Draft_Day",
+      "age",
+      "K_Depth_Role",
+      "FGA_week",
+      "FGM_week",
+      "FG_pct_week",
+      "Long_FGM_week",
+      "XP_Made_week",
+      "K_Rookie_Draft_Metric_0to100",
+      "K_Rookie_Athleticism_Metric_0to100",
+      "K_Rookie_Role_Readiness_Metric_0to100",
+      "K_Rookie_Context_Metric_0to100",
+      "K_Rookie_Final_Metric_0to100",
+      "K_Rookie_Final_Grade"
+    ))
+  ) %>%
+  dplyr::arrange(WK, dplyr::desc(K_Rookie_Final_Metric_0to100))
+# -------------------- K final eval block --------------------
+# Uses locked veteran and rookie K paths.
+# Official K fantasy eval uses the direct profile model.
+# Veteran matchup/context uses the direct-defense FGA-allowed metric.
+
+# -------------------------------------------------------------------
+# 1) Helper functions
+# -------------------------------------------------------------------
+
+if (!exists("rmse")) {
+  rmse <- function(actual, predicted) {
+    sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+  }
+}
+
+if (!exists("mae")) {
+  mae <- function(actual, predicted) {
+    mean(abs(actual - predicted), na.rm = TRUE)
+  }
+}
+
+if (!exists("rsq")) {
+  rsq <- function(actual, predicted) {
+    1 - sum((actual - predicted)^2, na.rm = TRUE) /
+      sum((actual - mean(actual, na.rm = TRUE))^2, na.rm = TRUE)
+  }
+}
+
+if (!exists("safe_cor")) {
+  safe_cor <- function(x, y) {
+    x <- suppressWarnings(as.numeric(x))
+    y <- suppressWarnings(as.numeric(y))
+    
+    if (all(is.na(x)) || all(is.na(y))) return(NA_real_)
+    if (sd(x, na.rm = TRUE) == 0 || sd(y, na.rm = TRUE) == 0) return(NA_real_)
+    
+    cor(x, y, use = "pairwise.complete.obs")
+  }
+}
+
+if (!exists("calc_vif_table")) {
+  calc_vif_table <- function(df, features) {
+    features <- features[features %in% names(df)]
+    
+    if (length(features) <= 1) {
+      return(tibble::tibble(feature = features, vif = 1))
+    }
+    
+    d <- df[, features, drop = FALSE]
+    d <- d[stats::complete.cases(d), , drop = FALSE]
+    
+    if (nrow(d) < 10) {
+      return(tibble::tibble(feature = features, vif = NA_real_))
+    }
+    
+    vif_vals <- sapply(features, function(f) {
+      others <- setdiff(features, f)
+      
+      if (length(others) == 0) return(1)
+      
+      fit <- stats::lm(
+        stats::as.formula(paste(f, "~", paste(others, collapse = " + "))),
+        data = d
+      )
+      
+      r2 <- summary(fit)$r.squared
+      if (is.na(r2) || r2 >= 0.9999) return(Inf)
+      
+      1 / (1 - r2)
+    })
+    
+    tibble::tibble(
+      feature = names(vif_vals),
+      vif = as.numeric(vif_vals)
+    )
+  }
+}
+
+if (!exists("fit_target_model")) {
+  fit_target_model <- function(train_df, test_df, full_df, target, features, clip_zero = TRUE) {
+    features <- features[features %in% names(train_df)]
+    
+    if (!(target %in% names(train_df)) || length(features) == 0) {
+      return(NULL)
+    }
+    
+    train_use <- train_df %>%
+      dplyr::select(dplyr::all_of(c(target, features))) %>%
+      dplyr::filter(stats::complete.cases(.))
+    
+    test_use <- test_df %>%
+      dplyr::select(dplyr::all_of(c(target, features))) %>%
+      dplyr::filter(stats::complete.cases(.))
+    
+    if (nrow(train_use) < 20 || nrow(test_use) < 5) {
+      return(NULL)
+    }
+    
+    model_formula <- stats::as.formula(
+      paste(target, "~", paste(features, collapse = " + "))
+    )
+    
+    fit <- stats::lm(model_formula, data = train_use)
+    
+    pred_test <- stats::predict(fit, newdata = test_use)
+    pred_full <- stats::predict(fit, newdata = full_df)
+    
+    if (clip_zero) {
+      pred_test <- ifelse(is.na(pred_test), NA_real_, pmax(0, pred_test))
+      pred_full <- ifelse(is.na(pred_full), NA_real_, pmax(0, pred_full))
+    }
+    
+    metrics <- tibble::tibble(
+      target = target,
+      features = paste(features, collapse = " + "),
+      n_train = nrow(train_use),
+      n_test = nrow(test_use),
+      rmse = rmse(test_use[[target]], pred_test),
+      mae = mae(test_use[[target]], pred_test),
+      r2 = rsq(test_use[[target]], pred_test),
+      correlation = safe_cor(test_use[[target]], pred_test)
+    )
+    
+    vif_tbl <- calc_vif_table(train_use, features) %>%
+      dplyr::mutate(target = target)
+    
+    list(
+      fit = fit,
+      pred_full = pred_full,
+      metrics = metrics,
+      vif = vif_tbl
+    )
+  }
+}
+
+if (!exists("k_pick_numeric")) {
+  k_pick_numeric <- function(df, choices) {
+    choices <- choices[choices %in% names(df)]
+    if (length(choices) == 0) return(rep(NA_real_, nrow(df)))
+    
+    out <- suppressWarnings(as.numeric(df[[choices[1]]]))
+    if (length(choices) > 1) {
+      for (col in choices[-1]) {
+        out <- dplyr::coalesce(out, suppressWarnings(as.numeric(df[[col]])))
+      }
+    }
+    out
+  }
+}
+
+# -------------------------------------------------------------------
+# 2) Build eval source
+# -------------------------------------------------------------------
+
+k_projection_eval <- K_sch_21 %>%
+  dplyr::mutate(
+    WK = suppressWarnings(as.integer(WK)),
+    SEA_num = suppressWarnings(as.integer(as.character(SEA))),
+    rookie_year_num = suppressWarnings(as.integer(as.character(rookie_year))),
+    fantasyPts_k = k_pick_numeric(., c("fantasyPts_ply", "fantasyPts")),
+    FGA_k = k_pick_numeric(., c("FGA_ply", "FGA")),
+    FGM_k = k_pick_numeric(., c("FGM_ply", "FGM")),
+    FG_pct_k = k_pick_numeric(., c("FG_pct_ply", "FG_pct")),
+    complete19_k = k_pick_numeric(., c("complete19_ply", "complete19")),
+    complete29_k = k_pick_numeric(., c("complete29_ply", "complete29")),
+    complete39_k = k_pick_numeric(., c("complete39_ply", "complete39")),
+    complete49_k = k_pick_numeric(., c("complete49_ply", "complete49")),
+    complete50_k = k_pick_numeric(., c("complete50_ply", "complete50")),
+    epsMade_k = k_pick_numeric(., c("epsMade_ply", "epsMade"))
+  ) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM, WK, dplyr::desc(fantasyPts_k)) %>%
+  dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+  dplyr::select(
+    Player, TM, WK, SEA_num, rookie_year_num,
+    fantasyPts_k, FGA_k, FGM_k, FG_pct_k,
+    complete19_k, complete29_k, complete39_k, complete49_k, complete50_k, epsMade_k
+  ) %>%
+  dplyr::left_join(
+    k_sch_21_avg %>%
+      dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+      dplyr::arrange(Player, TM, WK) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
+      dplyr::select(
+        Player, TM, WK,
+        dplyr::any_of(c(
+          "K_History_Metric_0to100",
+          "K_Opportunity_Metric_0to100",
+          "K_Accuracy_Metric_0to100",
+          "K_Range_Metric_0to100",
+          "K_Team_Context_Metric_0to100",
+          "K_Matchup_Metric_0to100",
+          "K_Matchup_DirectFGA_v2_Metric_0to100",
+          "K_Fantasy_Final_Metric_0to100",
+          "K_Rookie_Draft_Metric_0to100",
+          "K_Rookie_Athleticism_Metric_0to100",
+          "K_Rookie_Role_Readiness_Metric_0to100",
+          "K_Rookie_Context_Metric_0to100",
+          "K_Rookie_Final_Metric_0to100"
+        ))
+      ),
+    by = c("Player", "TM", "WK")
+  ) %>%
+  dplyr::mutate(
+    Long_FGM = dplyr::coalesce(complete39_k, 0) + dplyr::coalesce(complete49_k, 0) + dplyr::coalesce(complete50_k, 0),
+    XP_Made = dplyr::coalesce(epsMade_k, 0),
+    K_Box_Fantasy_Target =
+      3 * dplyr::coalesce(complete19_k, 0) +
+      3 * dplyr::coalesce(complete29_k, 0) +
+      3 * dplyr::coalesce(complete39_k, 0) +
+      4 * dplyr::coalesce(complete49_k, 0) +
+      5 * dplyr::coalesce(complete50_k, 0) +
+      XP_Made,
+    K_Fantasy_Target = dplyr::coalesce(fantasyPts_k, K_Box_Fantasy_Target),
+    is_rookie = !is.na(SEA_num) & !is.na(rookie_year_num) & SEA_num == rookie_year_num
+  )
+
+# -------------------------------------------------------------------
+# 3) Build unified profile metrics
+# -------------------------------------------------------------------
+
+k_projection_eval$K_Rookie_Opportunity_Profile_Metric_0to100 <- k_projection_eval$K_Rookie_Draft_Metric_0to100
+k_projection_eval$K_Rookie_Range_Profile_Metric_0to100 <- k_projection_eval$K_Rookie_Draft_Metric_0to100
+k_projection_eval$K_Rookie_XP_Profile_Metric_0to100 <- k_projection_eval$K_Rookie_Draft_Metric_0to100
+
+k_projection_eval <- k_projection_eval %>%
+  dplyr::mutate(
+    K_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(K_Rookie_Final_Metric_0to100),
+      K_Rookie_Final_Metric_0to100,
+      K_Fantasy_Final_Metric_0to100
+    ),
+    K_Opportunity_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(K_Rookie_Opportunity_Profile_Metric_0to100),
+      K_Rookie_Opportunity_Profile_Metric_0to100,
+      K_Opportunity_Metric_0to100
+    ),
+    K_Range_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(K_Rookie_Range_Profile_Metric_0to100),
+      K_Rookie_Range_Profile_Metric_0to100,
+      K_Range_Metric_0to100
+    ),
+    K_XP_Profile_Metric_0to100 = ifelse(
+      is_rookie & !is.na(K_Rookie_XP_Profile_Metric_0to100),
+      K_Rookie_XP_Profile_Metric_0to100,
+      K_Team_Context_Metric_0to100
+    ),
+    K_Context_Profile_Metric_0to100 = K_Matchup_DirectFGA_v2_Metric_0to100
+  )
+
+# -------------------------------------------------------------------
+# 4) Train / test split
+# -------------------------------------------------------------------
+
+k_train_projection <- k_projection_eval %>% dplyr::filter(WK <= 14)
+k_test_projection  <- k_projection_eval %>% dplyr::filter(WK > 14)
+
+# -------------------------------------------------------------------
+# 5) Target models
+# -------------------------------------------------------------------
+
+k_model_FGA <- fit_target_model(
+  k_train_projection, k_test_projection, k_projection_eval,
+  target = "FGA_k",
+  features = c(
+    "K_Opportunity_Profile_Metric_0to100",
+    "K_Context_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+k_model_FGM <- fit_target_model(
+  k_train_projection, k_test_projection, k_projection_eval,
+  target = "FGM_k",
+  features = c(
+    "K_Opportunity_Profile_Metric_0to100",
+    "K_Accuracy_Metric_0to100",
+    "K_Context_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+k_model_Long_FGM <- fit_target_model(
+  k_train_projection, k_test_projection, k_projection_eval,
+  target = "Long_FGM",
+  features = c(
+    "K_Range_Profile_Metric_0to100",
+    "K_Context_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+k_model_XP_Made <- fit_target_model(
+  k_train_projection, k_test_projection, k_projection_eval,
+  target = "XP_Made",
+  features = c(
+    "K_XP_Profile_Metric_0to100",
+    "K_Context_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+k_model_fantasy_direct <- fit_target_model(
+  k_train_projection, k_test_projection, k_projection_eval,
+  target = "K_Fantasy_Target",
+  features = c("K_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+k_projection_models <- list(
+  FGA = k_model_FGA,
+  FGM = k_model_FGM,
+  Long_FGM = k_model_Long_FGM,
+  XP_Made = k_model_XP_Made,
+  K_Fantasy_Target = k_model_fantasy_direct
+)
+
+k_projection_model_metrics <- dplyr::bind_rows(
+  lapply(k_projection_models, function(x) if (!is.null(x)) x$metrics)
+) %>%
+  dplyr::arrange(target)
+
+k_projection_model_vif <- dplyr::bind_rows(
+  lapply(k_projection_models, function(x) if (!is.null(x)) x$vif)
+) %>%
+  dplyr::arrange(target, dplyr::desc(vif))
+
+# -------------------------------------------------------------------
+# 6) Full-table predictions
+# -------------------------------------------------------------------
+
+if (!is.null(k_model_FGA)) {
+  k_projection_eval$K_Proj_FGA <- k_model_FGA$pred_full
+}
+
+if (!is.null(k_model_FGM)) {
+  k_projection_eval$K_Proj_FGM <- k_model_FGM$pred_full
+}
+
+if (!is.null(k_model_Long_FGM)) {
+  k_projection_eval$K_Proj_LongFGM <- k_model_Long_FGM$pred_full
+}
+
+if (!is.null(k_model_XP_Made)) {
+  k_projection_eval$K_Proj_XPMade <- k_model_XP_Made$pred_full
+}
+
+if (!is.null(k_model_fantasy_direct)) {
+  k_projection_eval$K_Proj_FantasyPts <- k_model_fantasy_direct$pred_full
+}
+
+k_fantasy_projection_comparison <- if (!is.null(k_model_fantasy_direct)) {
+  k_model_fantasy_direct$metrics %>%
+    dplyr::mutate(model_name = "direct_profile") %>%
+    dplyr::select(target, model_name, features, n_train, n_test, rmse, mae, r2, correlation)
+} else {
+  tibble::tibble()
+}
+
+# -------------------------------------------------------------------
+# 7) Eval screens
+# -------------------------------------------------------------------
+
+k_projection_metric_cols <- c(
+  "K_Profile_Metric_0to100",
+  "K_Opportunity_Profile_Metric_0to100",
+  "K_Range_Profile_Metric_0to100",
+  "K_XP_Profile_Metric_0to100",
+  "K_Context_Profile_Metric_0to100",
+  "K_History_Metric_0to100",
+  "K_Opportunity_Metric_0to100",
+  "K_Accuracy_Metric_0to100",
+  "K_Range_Metric_0to100",
+  "K_Team_Context_Metric_0to100",
+  "K_Matchup_Metric_0to100",
+  "K_Matchup_DirectFGA_v2_Metric_0to100",
+  "K_Rookie_Draft_Metric_0to100"
+)
+
+k_projection_metric_cols <- k_projection_metric_cols[k_projection_metric_cols %in% names(k_projection_eval)]
+
+k_projection_target_screen <- tibble::tibble(
+  metric = k_projection_metric_cols,
+  cor_to_fantasyPts = sapply(k_projection_metric_cols, function(col) safe_cor(k_projection_eval[[col]], k_projection_eval$K_Fantasy_Target)),
+  cor_to_box_fantasy = sapply(k_projection_metric_cols, function(col) safe_cor(k_projection_eval[[col]], k_projection_eval$K_Box_Fantasy_Target)),
+  cor_to_fga = sapply(k_projection_metric_cols, function(col) safe_cor(k_projection_eval[[col]], k_projection_eval$FGA_k)),
+  cor_to_fgm = sapply(k_projection_metric_cols, function(col) safe_cor(k_projection_eval[[col]], k_projection_eval$FGM_k)),
+  cor_to_long_fgm = sapply(k_projection_metric_cols, function(col) safe_cor(k_projection_eval[[col]], k_projection_eval$Long_FGM)),
+  cor_to_xpm = sapply(k_projection_metric_cols, function(col) safe_cor(k_projection_eval[[col]], k_projection_eval$XP_Made))
+) %>%
+  dplyr::arrange(dplyr::desc(cor_to_fantasyPts))
+
+k_eval_split_summary <- tibble::tibble(
+  cohort = c("all_rows", "rookies", "non_rookies"),
+  cor_profile_to_fantasy = c(
+    safe_cor(k_projection_eval$K_Profile_Metric_0to100, k_projection_eval$K_Fantasy_Target),
+    safe_cor(k_projection_eval$K_Profile_Metric_0to100[k_projection_eval$is_rookie], k_projection_eval$K_Fantasy_Target[k_projection_eval$is_rookie]),
+    safe_cor(k_projection_eval$K_Profile_Metric_0to100[!k_projection_eval$is_rookie], k_projection_eval$K_Fantasy_Target[!k_projection_eval$is_rookie])
+  ),
+  cor_profile_to_box = c(
+    safe_cor(k_projection_eval$K_Profile_Metric_0to100, k_projection_eval$K_Box_Fantasy_Target),
+    safe_cor(k_projection_eval$K_Profile_Metric_0to100[k_projection_eval$is_rookie], k_projection_eval$K_Box_Fantasy_Target[k_projection_eval$is_rookie]),
+    safe_cor(k_projection_eval$K_Profile_Metric_0to100[!k_projection_eval$is_rookie], k_projection_eval$K_Box_Fantasy_Target[!k_projection_eval$is_rookie])
+  )
+)
+
+# -------------------------------------------------------------------
+# 8) Review table
+# -------------------------------------------------------------------
+
+k_projection_summary_final <- k_projection_eval %>%
+  dplyr::select(
+    Player, TM, WK, is_rookie,
+    K_Fantasy_Target,
+    K_Box_Fantasy_Target,
+    FGA_k,
+    FGM_k,
+    Long_FGM,
+    XP_Made,
+    K_Profile_Metric_0to100,
+    dplyr::any_of(c(
+      "K_Proj_FGA",
+      "K_Proj_FGM",
+      "K_Proj_LongFGM",
+      "K_Proj_XPMade",
+      "K_Proj_FantasyPts"
+    ))
+  ) %>%
+  dplyr::arrange(WK, dplyr::desc(K_Proj_FantasyPts))
+
+
 
 #DST
 #WK1
