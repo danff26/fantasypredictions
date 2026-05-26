@@ -33674,39 +33674,53 @@ dst_21 <- dst_21_avg |>
 
 dst_sch_21 <- dst_21
 
-Team_schedule_matchups_21_avg <- Team_schedule_matchups_21|>
-  select(Name:SEA,Head_Coach,HC_pace_Role_avg:avg_total_wind_off,Name_DEF,TM_DEF,Head_Coach_DEF,G_total_off:avg_total_wind_def)
-Team_schedule_matchups_21_unique <- Team_schedule_matchups_21_avg %>%
-  distinct(TM_DEF, .keep_all = TRUE)
-dst_21_avg <- dst_21_avg %>%
-  distinct(Player, .keep_all = TRUE)
-dst_sch_21_avg_raw <- dst_21_avg |>
-  left_join(Team_schedule_matchups_21_unique, by = c("TM_DEF"))
-
-x_cols <- names(dst_sch_21_avg_raw)[endsWith(names(dst_sch_21_avg_raw), ".x")]
-x_base_cols <- sub("\\.x$", "", x_cols)
-
-conflict_cols <- intersect(names(dst_sch_21_avg_raw), x_base_cols)
-
-dst_sch_21_avg <- dst_sch_21_avg_raw |>
+Team_schedule_matchups_21_avg <- Team_schedule_matchups_21 |>
   select(
-    -any_of(conflict_cols),
-    -ends_with(".y")
-  ) |>
-  rename_with(
-    ~ sub("\\.x$", "", .x),
-    .cols = ends_with(".x")
+    Name:SEA,
+    Head_Coach,
+    HC_pace_Role_avg:avg_total_wind_off,
+    Name_DEF,
+    TM_DEF,
+    Head_Coach_DEF,
+    G_total_off,
+    avg_total_wind_def
   )
 
-dst_data_clean <- dst_sch_21_avg %>%
-  select(-any_of(c("WK", "SEA","TM")))
-dst_sch_21_avg <- schedule_21 %>%
-  inner_join(dst_data_clean, by = "TM_DEF")
+team_matchups_21_off_avg <- Team_schedule_matchups_21_avg %>%
+  select(TM, Name, Head_Coach, HC_pace_Role_avg, avg_total_wind_off) %>%
+  distinct(TM, .keep_all = TRUE)
 
-dst_sch_21_avg <- dst_sch_21_avg |>
-  rename(gameday = gameday.x, gametime = gametime.x)|>
-  select(-gameday.y, -gametime.y)|>
-  select(TM:avg_total_DST_ftpts) |>
+team_matchups_21_def_avg <- Team_schedule_matchups_21_avg %>%
+  select(TM_DEF, Name_DEF, Head_Coach_DEF, G_total_off, avg_total_wind_def) %>%
+  distinct(TM_DEF, .keep_all = TRUE)
+
+dst_21_base <- dst_21 %>%
+  distinct(Player, TM_DEF, SEA, .keep_all = TRUE)
+
+dst_data_clean <- dst_21_base %>%
+  select(-any_of(c(
+    "WK",
+    "TM",
+    "gameday",
+    "weekday",
+    "gametime",
+    "Name",
+    "Head_Coach",
+    "HC_pace_Role_avg",
+    "Name_DEF",
+    "Head_Coach_DEF",
+    "G_total_off",
+    "avg_total_wind_def",
+    "avg_total_wind_off",
+    "avg_total_avg_total_wind_def",
+    "avg_total_avg_total_wind_off"
+  )))
+
+dst_sch_21_avg <- schedule_21 %>%
+  filter(!is.na(WK), WK <= 18) %>%
+  inner_join(dst_data_clean, by = c("TM_DEF", "SEA")) %>%
+  left_join(team_matchups_21_def_avg, by = "TM_DEF") %>%
+  left_join(team_matchups_21_off_avg, by = "TM") %>%
   select(
     Player,
     TM_DEF,
@@ -33716,30 +33730,776 @@ dst_sch_21_avg <- dst_sch_21_avg |>
     G,
     G_total_off,
     DST_ftpts,
-    gameday:gametime,
+    gameday,
+    weekday,
+    gametime,
     TM,
-    HC_Plays_Allw_Role_team:Team_PTs_allw_Role_team,
-    total_plys_def_team:Run_pct_def_team,
-    ATT_def_team:avg_total_wind_def,
-    Name:Pts_scr,
-    away_score:stadium
+    dplyr::any_of(c(
+      "Name",
+      "Head_Coach",
+      "HC_pace_Role_avg",
+      "avg_total_wind_off",
+      "Name_DEF",
+      "Head_Coach_DEF",
+      "avg_total_wind_def",
+      "HC_Plays_Allw_Role_team",
+      "HC_Pass_Run_Role_def_team",
+      "HC_DEF_Pass_Eff_Role_team",
+      "HC_aDOT_Allw_Role_team",
+      "HC_YAC_Allw_Role_team",
+      "HC_GapvsZone_Role_def_team",
+      "HC_WR_TGT_DEF_Role_team",
+      "HC_INLINE_TGT_DEF_Role_team",
+      "HC_BACK_TGT_DEF_Role_team",
+      "Team_Dline_Press_Role_team",
+      "Team_Dline_Run_Role_team",
+      "Team_RZ_DEF_Role_team",
+      "Team_RZ_Pass_Run_DEF_Role_team",
+      "HC_FGA_DEF_Role_team",
+      "Team_PTs_allw_Role_team",
+      "total_plys_def_team",
+      "Run_pct_def_team",
+      "ATT_def_team",
+      "Pts_scr"
+    )),
+    away_score:stadium,
+    starts_with("avg_total_")
   )
 
-# ---- FINAL CLEANUP DIRECTLY ON dst_sch_21_avg ----
+# -------------------- DST final veteran metric block --------------------
+# Main output table: dst_sch_21_avg
+# Official veteran DST score uses the pressure + matchup winner:
+# DST_Fantasy_PressureMatchup_v5_Metric_0to100
 
-x_cols <- names(dst_sch_21_avg)[endsWith(names(dst_sch_21_avg), ".x")]
+dst_pick_numeric <- function(df, choices = character(), patterns = character(), default = NA_real_) {
+  cols <- choices[choices %in% names(df)]
+  
+  if (length(patterns) > 0) {
+    for (pat in patterns) {
+      cols <- c(cols, names(df)[grepl(pat, names(df), perl = TRUE)])
+    }
+  }
+  
+  cols <- unique(cols)
+  
+  if (length(cols) == 0) {
+    return(rep(default, nrow(df)))
+  }
+  
+  out <- suppressWarnings(as.numeric(df[[cols[1]]]))
+  
+  if (length(cols) > 1) {
+    for (col in cols[-1]) {
+      out <- dplyr::coalesce(out, suppressWarnings(as.numeric(df[[col]])))
+    }
+  }
+  
+  out
+}
 
-x_base_cols <- sub("\\.x$", "", x_cols)
+dst_build_group_score <- function(df, cols, target_col) {
+  cols <- intersect(cols, names(df))
+  if (length(cols) == 0) return(rep(NA_real_, nrow(df)))
+  build_group_score(df, cols, target_col)
+}
 
-conflict_cols <- intersect(names(dst_sch_21_avg), x_base_cols)
+# -------------------------------------------------------------------
+# 1) Build veteran eval table
+# -------------------------------------------------------------------
 
-dst_sch_21_avg <- dst_sch_21_avg |>
-  select(
-    -any_of(conflict_cols),
-    -ends_with(".y")
-  ) |>
-  rename_with(
-    ~ sub("\\.x$", "", .x),
-    .cols = ends_with(".x")
+dst_metric_targets_21 <- dst_sch_21 %>%
+  dplyr::mutate(
+    WK = suppressWarnings(as.integer(WK)),
+    DST_ftpts_week = dst_pick_numeric(., c("DST_ftpts"), c("^DST_ftpts\\.[xy]$", "^DST_ftpts_(ply|team)$")),
+    SACK_def_week = dst_pick_numeric(., c("SACK_def"), c("^SACK_def\\.[xy]$", "^SACK_def_(ply|team)$"), default = 0),
+    INT_def_week = dst_pick_numeric(., c("INT_def"), c("^INT_def\\.[xy]$", "^INT_def_(ply|team)$"), default = 0),
+    FUM_def_week = dst_pick_numeric(., c("FUM_def"), c("^FUM_def\\.[xy]$", "^FUM_def_(ply|team)$"), default = 0),
+    safety_def_week = dst_pick_numeric(., c("safety_def"), c("^safety_def\\.[xy]$", "^safety_def_(ply|team)$"), default = 0),
+    Def_TDs_week = dst_pick_numeric(., c("Def_TDs"), c("^Def_TDs\\.[xy]$", "^Def_TDs_(ply|team)$"), default = 0),
+    K_TDs_week = dst_pick_numeric(., c("K_TDs"), c("^K_TDs\\.[xy]$", "^K_TDs_(ply|team)$"), default = 0),
+    P_TDs_week = dst_pick_numeric(., c("P_TDs"), c("^P_TDs\\.[xy]$", "^P_TDs_(ply|team)$"), default = 0),
+    PTs_allw_week = dst_pick_numeric(., c("PTs_allw"), c("^PTs_allw\\.[xy]$", "^PTs_allw_(ply|team)$"))
+  ) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM_DEF, WK, dplyr::desc(DST_ftpts_week)) %>%
+  dplyr::distinct(Player, TM_DEF, WK, .keep_all = TRUE) %>%
+  dplyr::select(
+    Player,
+    TM_DEF,
+    WK,
+    DST_ftpts_week,
+    SACK_def_week,
+    INT_def_week,
+    FUM_def_week,
+    safety_def_week,
+    Def_TDs_week,
+    K_TDs_week,
+    P_TDs_week,
+    PTs_allw_week
   )
+
+dst_metric_df <- dst_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM_DEF, WK) %>%
+  dplyr::distinct(Player, TM_DEF, WK, .keep_all = TRUE) %>%
+  dplyr::left_join(dst_metric_targets_21, by = c("Player", "TM_DEF", "WK")) %>%
+  dplyr::mutate(
+    avg_dst_ftpts = dst_pick_numeric(., c("avg_total_DST_ftpts"), c("^avg_total_DST_ftpts\\.[xy]$")),
+    avg_sack_def = dst_pick_numeric(., c("avg_total_SACK_def"), c("^avg_total_SACK_def\\.[xy]$")),
+    avg_int_def = dst_pick_numeric(., c("avg_total_INT_def"), c("^avg_total_INT_def\\.[xy]$")),
+    avg_fum_def = dst_pick_numeric(., c("avg_total_FUM_def"), c("^avg_total_FUM_def\\.[xy]$")),
+    avg_safety_def = dst_pick_numeric(., c("avg_total_safety_def"), c("^avg_total_safety_def\\.[xy]$")),
+    avg_def_tds = dst_pick_numeric(., c("avg_total_Def_TDs"), c("^avg_total_Def_TDs\\.[xy]$")),
+    avg_k_tds = dst_pick_numeric(., c("avg_total_K_TDs"), c("^avg_total_K_TDs\\.[xy]$")),
+    avg_p_tds = dst_pick_numeric(., c("avg_total_P_TDs"), c("^avg_total_P_TDs\\.[xy]$")),
+    avg_pts_allw = dst_pick_numeric(., c("avg_total_PTs_allw"), c("^avg_total_PTs_allw\\.[xy]$")),
+    avg_pts_scr = dst_pick_numeric(., c("avg_total_Pts_scr"), c("^avg_total_Pts_scr\\.[xy]$")),
+    avg_rz_opp = dst_pick_numeric(., c("avg_total_RZ_opp"), c("^avg_total_RZ_opp\\.[xy]$")),
+    avg_total_plys_off = dst_pick_numeric(., c("avg_total_total_plys_off"), c("^avg_total_total_plys_off\\.[xy]$")),
+    
+    DST_Fantasy_Target = DST_ftpts_week,
+    DST_Box_Fantasy_Target = DST_ftpts_week,
+    DST_Turnovers_week = dplyr::coalesce(INT_def_week, 0) + dplyr::coalesce(FUM_def_week, 0),
+    DST_TDs_week = dplyr::coalesce(Def_TDs_week, 0) + dplyr::coalesce(K_TDs_week, 0) + dplyr::coalesce(P_TDs_week, 0),
+    DST_BigPlay_week =
+      dplyr::coalesce(SACK_def_week, 0) +
+      2 * dplyr::coalesce(INT_def_week, 0) +
+      2 * dplyr::coalesce(FUM_def_week, 0) +
+      2 * dplyr::coalesce(safety_def_week, 0) +
+      6 * DST_TDs_week
+  ) %>%
+  dplyr::filter(!is.na(DST_ftpts_week))
+
+# -------------------------------------------------------------------
+# 2) Score veteran DST inputs
+# -------------------------------------------------------------------
+
+dst_positive_numeric_features <- intersect(
+  c(
+    "avg_dst_ftpts",
+    "avg_sack_def",
+    "avg_int_def",
+    "avg_fum_def",
+    "avg_safety_def",
+    "avg_def_tds",
+    "avg_k_tds",
+    "avg_p_tds"
+  ),
+  names(dst_metric_df)
+)
+
+dst_inverse_numeric_features <- intersect(
+  c(
+    "avg_pts_allw",
+    "avg_pts_scr",
+    "avg_rz_opp",
+    "avg_total_plys_off"
+  ),
+  names(dst_metric_df)
+)
+
+dst_role_features <- intersect(
+  c(
+    "HC_pace_Role_avg",
+    "Team_Pts_scr_Role_avg",
+    "Team_RZ_Role_avg",
+    "Team_RZ_Pass_Run_Role_avg",
+    "HC_Plays_Allw_Role_team",
+    "HC_Pass_Run_Role_def_team",
+    "HC_DEF_Pass_Eff_Role_team",
+    "HC_aDOT_Allw_Role_team",
+    "HC_YAC_Allw_Role_team",
+    "HC_GapvsZone_Role_def_team",
+    "HC_WR_TGT_DEF_Role_team",
+    "HC_INLINE_TGT_DEF_Role_team",
+    "HC_BACK_TGT_DEF_Role_team",
+    "Team_Dline_Press_Role_team",
+    "Team_Dline_Run_Role_team",
+    "Team_RZ_DEF_Role_team",
+    "Team_RZ_Pass_Run_DEF_Role_team",
+    "HC_FGA_DEF_Role_team",
+    "Team_PTs_allw_Role_team"
+  ),
+  names(dst_metric_df)
+)
+
+for (col in dst_positive_numeric_features) {
+  dst_metric_df[[paste0("score_", col)]] <- pct_score(dst_metric_df[[col]], inverse = FALSE)
+}
+
+for (col in dst_inverse_numeric_features) {
+  dst_metric_df[[paste0("score_", col)]] <- pct_score(dst_metric_df[[col]], inverse = TRUE)
+}
+
+for (col in dst_role_features) {
+  dst_metric_df[[paste0("score_", col)]] <- role_score_from_target(
+    dst_metric_df[[col]],
+    dst_metric_df$DST_Fantasy_Target
+  )
+}
+
+# -------------------------------------------------------------------
+# 3) Veteran DST sub-metrics
+# -------------------------------------------------------------------
+
+dst_metric_df$DST_History_Metric_0to100 <- dst_build_group_score(
+  dst_metric_df,
+  c("score_avg_dst_ftpts"),
+  "DST_Fantasy_Target"
+)
+
+dst_metric_df$DST_Playmaking_Metric_0to100 <- dst_build_group_score(
+  dst_metric_df,
+  c(
+    "score_avg_sack_def",
+    "score_avg_int_def",
+    "score_avg_fum_def",
+    "score_avg_safety_def",
+    "score_avg_def_tds",
+    "score_avg_k_tds",
+    "score_avg_p_tds"
+  ),
+  "DST_Fantasy_Target"
+)
+
+dst_metric_df$DST_Prevention_Metric_0to100 <- dst_build_group_score(
+  dst_metric_df,
+  c(
+    "score_avg_pts_allw",
+    "score_HC_Plays_Allw_Role_team",
+    "score_Team_RZ_DEF_Role_team",
+    "score_Team_RZ_Pass_Run_DEF_Role_team",
+    "score_Team_PTs_allw_Role_team"
+  ),
+  "DST_Fantasy_Target"
+)
+
+dst_metric_df$DST_Matchup_Metric_0to100 <- dst_build_group_score(
+  dst_metric_df,
+  c(
+    "score_avg_pts_scr",
+    "score_avg_rz_opp",
+    "score_avg_total_plys_off",
+    "score_HC_pace_Role_avg",
+    "score_Team_Pts_scr_Role_avg",
+    "score_Team_RZ_Role_avg",
+    "score_Team_RZ_Pass_Run_Role_avg"
+  ),
+  "DST_Fantasy_Target"
+)
+
+dst_metric_df$DST_Pressure_Coverage_Metric_0to100 <- dst_build_group_score(
+  dst_metric_df,
+  c(
+    "score_HC_Pass_Run_Role_def_team",
+    "score_HC_DEF_Pass_Eff_Role_team",
+    "score_HC_aDOT_Allw_Role_team",
+    "score_HC_YAC_Allw_Role_team",
+    "score_HC_GapvsZone_Role_def_team",
+    "score_HC_WR_TGT_DEF_Role_team",
+    "score_HC_INLINE_TGT_DEF_Role_team",
+    "score_HC_BACK_TGT_DEF_Role_team",
+    "score_Team_Dline_Press_Role_team",
+    "score_Team_Dline_Run_Role_team"
+  ),
+  "DST_Fantasy_Target"
+)
+
+# -------------------------------------------------------------------
+# 4) Official veteran DST fantasy metric
+# Pressure + matchup winner
+# -------------------------------------------------------------------
+
+dst_metric_df$DST_Fantasy_Final_Metric_0to100 <- build_weighted_metric(
+  dst_metric_df,
+  c(
+    DST_History_Metric_0to100 = 0.15,
+    DST_Playmaking_Metric_0to100 = 0.30,
+    DST_Prevention_Metric_0to100 = 0.15,
+    DST_Matchup_Metric_0to100 = 0.20,
+    DST_Pressure_Coverage_Metric_0to100 = 0.20
+  )
+)
+
+dst_metric_df$DST_Fantasy_Final_Grade <- grade_from_score(
+  dst_metric_df$DST_Fantasy_Final_Metric_0to100
+)
+
+# -------------------------------------------------------------------
+# 5) Store veteran DST columns on dst_sch_21_avg
+# -------------------------------------------------------------------
+
+dst_veteran_cols_to_store <- c(
+  "DST_History_Metric_0to100",
+  "DST_Playmaking_Metric_0to100",
+  "DST_Prevention_Metric_0to100",
+  "DST_Matchup_Metric_0to100",
+  "DST_Pressure_Coverage_Metric_0to100",
+  "DST_Fantasy_Final_Metric_0to100",
+  "DST_Fantasy_Final_Grade"
+)
+
+dst_sch_21_avg <- dst_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::select(-dplyr::any_of(dst_veteran_cols_to_store)) %>%
+  dplyr::left_join(
+    dst_metric_df %>%
+      dplyr::select(Player, TM_DEF, WK, dplyr::any_of(dst_veteran_cols_to_store)) %>%
+      dplyr::distinct(Player, TM_DEF, WK, .keep_all = TRUE),
+    by = c("Player", "TM_DEF", "WK")
+  )
+
+# -------------------------------------------------------------------
+# 6) Optional review table
+# -------------------------------------------------------------------
+
+dst_metric_summary_final <- dst_metric_df %>%
+  dplyr::select(
+    Player, TM_DEF, WK,
+    DST_Fantasy_Target,
+    DST_Box_Fantasy_Target,
+    PTs_allw_week,
+    SACK_def_week,
+    INT_def_week,
+    FUM_def_week,
+    DST_TDs_week,
+    DST_BigPlay_week,
+    DST_History_Metric_0to100,
+    DST_Playmaking_Metric_0to100,
+    DST_Prevention_Metric_0to100,
+    DST_Matchup_Metric_0to100,
+    DST_Pressure_Coverage_Metric_0to100,
+    DST_Fantasy_Final_Metric_0to100,
+    DST_Fantasy_Final_Grade
+  ) %>%
+  dplyr::arrange(WK, dplyr::desc(DST_Fantasy_Final_Metric_0to100))
+# -------------------- DST final eval block --------------------
+# Uses locked veteran DST path only.
+# Official DST fantasy eval uses the direct profile model.
+
+# -------------------------------------------------------------------
+# 1) Helper functions
+# -------------------------------------------------------------------
+
+if (!exists("rmse")) {
+  rmse <- function(actual, predicted) {
+    sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+  }
+}
+
+if (!exists("mae")) {
+  mae <- function(actual, predicted) {
+    mean(abs(actual - predicted), na.rm = TRUE)
+  }
+}
+
+if (!exists("rsq")) {
+  rsq <- function(actual, predicted) {
+    1 - sum((actual - predicted)^2, na.rm = TRUE) /
+      sum((actual - mean(actual, na.rm = TRUE))^2, na.rm = TRUE)
+  }
+}
+
+if (!exists("safe_cor")) {
+  safe_cor <- function(x, y) {
+    x <- suppressWarnings(as.numeric(x))
+    y <- suppressWarnings(as.numeric(y))
+    
+    if (all(is.na(x)) || all(is.na(y))) return(NA_real_)
+    if (sd(x, na.rm = TRUE) == 0 || sd(y, na.rm = TRUE) == 0) return(NA_real_)
+    
+    cor(x, y, use = "pairwise.complete.obs")
+  }
+}
+
+if (!exists("calc_vif_table")) {
+  calc_vif_table <- function(df, features) {
+    features <- features[features %in% names(df)]
+    
+    if (length(features) <= 1) {
+      return(tibble::tibble(feature = features, vif = 1))
+    }
+    
+    d <- df[, features, drop = FALSE]
+    d <- d[stats::complete.cases(d), , drop = FALSE]
+    
+    if (nrow(d) < 10) {
+      return(tibble::tibble(feature = features, vif = NA_real_))
+    }
+    
+    vif_vals <- sapply(features, function(f) {
+      others <- setdiff(features, f)
+      
+      if (length(others) == 0) return(1)
+      
+      fit <- stats::lm(
+        stats::as.formula(paste(f, "~", paste(others, collapse = " + "))),
+        data = d
+      )
+      
+      r2 <- summary(fit)$r.squared
+      if (is.na(r2) || r2 >= 0.9999) return(Inf)
+      
+      1 / (1 - r2)
+    })
+    
+    tibble::tibble(
+      feature = names(vif_vals),
+      vif = as.numeric(vif_vals)
+    )
+  }
+}
+
+if (!exists("fit_target_model")) {
+  fit_target_model <- function(train_df, test_df, full_df, target, features, clip_zero = TRUE) {
+    features <- features[features %in% names(train_df)]
+    
+    if (!(target %in% names(train_df)) || length(features) == 0) {
+      return(NULL)
+    }
+    
+    train_use <- train_df %>%
+      dplyr::select(dplyr::all_of(c(target, features))) %>%
+      dplyr::filter(stats::complete.cases(.))
+    
+    test_use <- test_df %>%
+      dplyr::select(dplyr::all_of(c(target, features))) %>%
+      dplyr::filter(stats::complete.cases(.))
+    
+    if (nrow(train_use) < 20 || nrow(test_use) < 5) {
+      return(NULL)
+    }
+    
+    model_formula <- stats::as.formula(
+      paste(target, "~", paste(features, collapse = " + "))
+    )
+    
+    fit <- stats::lm(model_formula, data = train_use)
+    
+    pred_test <- stats::predict(fit, newdata = test_use)
+    pred_full <- stats::predict(fit, newdata = full_df)
+    
+    if (clip_zero) {
+      pred_test <- ifelse(is.na(pred_test), NA_real_, pmax(0, pred_test))
+      pred_full <- ifelse(is.na(pred_full), NA_real_, pmax(0, pred_full))
+    }
+    
+    metrics <- tibble::tibble(
+      target = target,
+      features = paste(features, collapse = " + "),
+      n_train = nrow(train_use),
+      n_test = nrow(test_use),
+      rmse = rmse(test_use[[target]], pred_test),
+      mae = mae(test_use[[target]], pred_test),
+      r2 = rsq(test_use[[target]], pred_test),
+      correlation = safe_cor(test_use[[target]], pred_test)
+    )
+    
+    vif_tbl <- calc_vif_table(train_use, features) %>%
+      dplyr::mutate(target = target)
+    
+    list(
+      fit = fit,
+      pred_full = pred_full,
+      metrics = metrics,
+      vif = vif_tbl
+    )
+  }
+}
+
+if (!exists("dst_pick_numeric")) {
+  dst_pick_numeric <- function(df, choices = character(), patterns = character(), default = NA_real_) {
+    cols <- choices[choices %in% names(df)]
+    
+    if (length(patterns) > 0) {
+      for (pat in patterns) {
+        cols <- c(cols, names(df)[grepl(pat, names(df), perl = TRUE)])
+      }
+    }
+    
+    cols <- unique(cols)
+    
+    if (length(cols) == 0) {
+      return(rep(default, nrow(df)))
+    }
+    
+    out <- suppressWarnings(as.numeric(df[[cols[1]]]))
+    
+    if (length(cols) > 1) {
+      for (col in cols[-1]) {
+        out <- dplyr::coalesce(out, suppressWarnings(as.numeric(df[[col]])))
+      }
+    }
+    
+    out
+  }
+}
+
+# -------------------------------------------------------------------
+# 2) Build eval source
+# -------------------------------------------------------------------
+
+dst_metric_targets_21 <- dst_sch_21 %>%
+  dplyr::mutate(
+    WK = suppressWarnings(as.integer(WK)),
+    DST_ftpts_week = dst_pick_numeric(., c("DST_ftpts"), c("^DST_ftpts\\.[xy]$", "^DST_ftpts_(ply|team)$")),
+    SACK_def_week = dst_pick_numeric(., c("SACK_def"), c("^SACK_def\\.[xy]$", "^SACK_def_(ply|team)$"), default = 0),
+    INT_def_week = dst_pick_numeric(., c("INT_def"), c("^INT_def\\.[xy]$", "^INT_def_(ply|team)$"), default = 0),
+    FUM_def_week = dst_pick_numeric(., c("FUM_def"), c("^FUM_def\\.[xy]$", "^FUM_def_(ply|team)$"), default = 0),
+    safety_def_week = dst_pick_numeric(., c("safety_def"), c("^safety_def\\.[xy]$", "^safety_def_(ply|team)$"), default = 0),
+    Def_TDs_week = dst_pick_numeric(., c("Def_TDs"), c("^Def_TDs\\.[xy]$", "^Def_TDs_(ply|team)$"), default = 0),
+    K_TDs_week = dst_pick_numeric(., c("K_TDs"), c("^K_TDs\\.[xy]$", "^K_TDs_(ply|team)$"), default = 0),
+    P_TDs_week = dst_pick_numeric(., c("P_TDs"), c("^P_TDs\\.[xy]$", "^P_TDs_(ply|team)$"), default = 0),
+    PTs_allw_week = dst_pick_numeric(., c("PTs_allw"), c("^PTs_allw\\.[xy]$", "^PTs_allw_(ply|team)$"))
+  ) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM_DEF, WK, dplyr::desc(DST_ftpts_week)) %>%
+  dplyr::distinct(Player, TM_DEF, WK, .keep_all = TRUE) %>%
+  dplyr::select(
+    Player,
+    TM_DEF,
+    WK,
+    DST_ftpts_week,
+    SACK_def_week,
+    INT_def_week,
+    FUM_def_week,
+    safety_def_week,
+    Def_TDs_week,
+    K_TDs_week,
+    P_TDs_week,
+    PTs_allw_week
+  )
+
+dst_projection_eval <- dst_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::filter(!is.na(WK), WK <= 18) %>%
+  dplyr::arrange(Player, TM_DEF, WK) %>%
+  dplyr::distinct(Player, TM_DEF, WK, .keep_all = TRUE) %>%
+  dplyr::left_join(dst_metric_targets_21, by = c("Player", "TM_DEF", "WK")) %>%
+  dplyr::mutate(
+    DST_Fantasy_Target = dplyr::coalesce(
+      DST_ftpts_week,
+      dst_pick_numeric(., c("DST_ftpts"), c("^DST_ftpts\\.[xy]$"))
+    ),
+    DST_Box_Fantasy_Target = DST_Fantasy_Target,
+    DST_Turnovers_week = dplyr::coalesce(INT_def_week, 0) + dplyr::coalesce(FUM_def_week, 0),
+    DST_TDs_week = dplyr::coalesce(Def_TDs_week, 0) + dplyr::coalesce(K_TDs_week, 0) + dplyr::coalesce(P_TDs_week, 0),
+    DST_BigPlay_week =
+      dplyr::coalesce(SACK_def_week, 0) +
+      2 * dplyr::coalesce(INT_def_week, 0) +
+      2 * dplyr::coalesce(FUM_def_week, 0) +
+      2 * dplyr::coalesce(safety_def_week, 0) +
+      6 * DST_TDs_week,
+    
+    DST_Profile_Metric_0to100 = DST_Fantasy_Final_Metric_0to100,
+    DST_Playmaking_Profile_Metric_0to100 = DST_Playmaking_Metric_0to100,
+    DST_Prevention_Profile_Metric_0to100 = DST_Prevention_Metric_0to100,
+    DST_Matchup_Profile_Metric_0to100 = DST_Matchup_Metric_0to100,
+    DST_Pressure_Profile_Metric_0to100 = DST_Pressure_Coverage_Metric_0to100
+  ) %>%
+  dplyr::filter(!is.na(DST_Fantasy_Target))
+
+# -------------------------------------------------------------------
+# 3) Train / test split
+# -------------------------------------------------------------------
+
+dst_train_projection <- dst_projection_eval %>% dplyr::filter(WK <= 14)
+dst_test_projection  <- dst_projection_eval %>% dplyr::filter(WK > 14)
+
+# -------------------------------------------------------------------
+# 4) Target models
+# -------------------------------------------------------------------
+
+dst_model_pts_allowed <- fit_target_model(
+  dst_train_projection, dst_test_projection, dst_projection_eval,
+  target = "PTs_allw_week",
+  features = c(
+    "DST_Prevention_Profile_Metric_0to100",
+    "DST_Matchup_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+dst_model_sacks <- fit_target_model(
+  dst_train_projection, dst_test_projection, dst_projection_eval,
+  target = "SACK_def_week",
+  features = c(
+    "DST_Playmaking_Profile_Metric_0to100",
+    "DST_Pressure_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+dst_model_turnovers <- fit_target_model(
+  dst_train_projection, dst_test_projection, dst_projection_eval,
+  target = "DST_Turnovers_week",
+  features = c(
+    "DST_Playmaking_Profile_Metric_0to100",
+    "DST_Pressure_Profile_Metric_0to100",
+    "DST_Matchup_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+dst_model_bigplay <- fit_target_model(
+  dst_train_projection, dst_test_projection, dst_projection_eval,
+  target = "DST_BigPlay_week",
+  features = c(
+    "DST_Playmaking_Profile_Metric_0to100",
+    "DST_Pressure_Profile_Metric_0to100",
+    "DST_Matchup_Profile_Metric_0to100"
+  ),
+  clip_zero = TRUE
+)
+
+dst_model_fantasy_direct <- fit_target_model(
+  dst_train_projection, dst_test_projection, dst_projection_eval,
+  target = "DST_Fantasy_Target",
+  features = c("DST_Profile_Metric_0to100"),
+  clip_zero = TRUE
+)
+
+dst_projection_models <- list(
+  PTs_allw_week = dst_model_pts_allowed,
+  SACK_def_week = dst_model_sacks,
+  DST_Turnovers_week = dst_model_turnovers,
+  DST_BigPlay_week = dst_model_bigplay,
+  DST_Fantasy_Target = dst_model_fantasy_direct
+)
+
+dst_projection_model_metrics <- dplyr::bind_rows(
+  lapply(dst_projection_models, function(x) if (!is.null(x)) x$metrics)
+) %>%
+  dplyr::arrange(target)
+
+dst_projection_model_vif <- dplyr::bind_rows(
+  lapply(dst_projection_models, function(x) if (!is.null(x)) x$vif)
+) %>%
+  dplyr::arrange(target, dplyr::desc(vif))
+
+# -------------------------------------------------------------------
+# 5) Full-table predictions
+# -------------------------------------------------------------------
+
+if (!is.null(dst_model_pts_allowed)) {
+  dst_projection_eval$DST_Proj_PtsAllowed <- dst_model_pts_allowed$pred_full
+}
+
+if (!is.null(dst_model_sacks)) {
+  dst_projection_eval$DST_Proj_Sacks <- dst_model_sacks$pred_full
+}
+
+if (!is.null(dst_model_turnovers)) {
+  dst_projection_eval$DST_Proj_Turnovers <- dst_model_turnovers$pred_full
+}
+
+if (!is.null(dst_model_bigplay)) {
+  dst_projection_eval$DST_Proj_BigPlay <- dst_model_bigplay$pred_full
+}
+
+if (!is.null(dst_model_fantasy_direct)) {
+  dst_projection_eval$DST_Proj_FantasyPts <- dst_model_fantasy_direct$pred_full
+}
+
+dst_fantasy_projection_comparison <- if (!is.null(dst_model_fantasy_direct)) {
+  dst_model_fantasy_direct$metrics %>%
+    dplyr::mutate(model_name = "direct_profile") %>%
+    dplyr::select(target, model_name, features, n_train, n_test, rmse, mae, r2, correlation)
+} else {
+  tibble::tibble()
+}
+
+# -------------------------------------------------------------------
+# 6) Store eval columns on dst_sch_21_avg
+# -------------------------------------------------------------------
+
+dst_eval_cols_to_store <- c(
+  "DST_Proj_PtsAllowed",
+  "DST_Proj_Sacks",
+  "DST_Proj_Turnovers",
+  "DST_Proj_BigPlay",
+  "DST_Proj_FantasyPts"
+)
+
+dst_sch_21_avg <- dst_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::select(-dplyr::any_of(dst_eval_cols_to_store)) %>%
+  dplyr::left_join(
+    dst_projection_eval %>%
+      dplyr::select(Player, TM_DEF, WK, dplyr::any_of(dst_eval_cols_to_store)) %>%
+      dplyr::distinct(Player, TM_DEF, WK, .keep_all = TRUE),
+    by = c("Player", "TM_DEF", "WK")
+  )
+
+# -------------------------------------------------------------------
+# 7) Eval screens
+# -------------------------------------------------------------------
+
+dst_projection_metric_cols <- c(
+  "DST_Profile_Metric_0to100",
+  "DST_History_Metric_0to100",
+  "DST_Playmaking_Metric_0to100",
+  "DST_Prevention_Metric_0to100",
+  "DST_Matchup_Metric_0to100",
+  "DST_Pressure_Coverage_Metric_0to100",
+  "DST_Playmaking_Profile_Metric_0to100",
+  "DST_Prevention_Profile_Metric_0to100",
+  "DST_Matchup_Profile_Metric_0to100",
+  "DST_Pressure_Profile_Metric_0to100"
+)
+
+dst_projection_metric_cols <- dst_projection_metric_cols[dst_projection_metric_cols %in% names(dst_projection_eval)]
+
+dst_projection_target_screen <- tibble::tibble(
+  metric = dst_projection_metric_cols,
+  cor_to_fantasyPts = sapply(dst_projection_metric_cols, function(col) safe_cor(dst_projection_eval[[col]], dst_projection_eval$DST_Fantasy_Target)),
+  cor_to_low_pts_allowed = sapply(dst_projection_metric_cols, function(col) safe_cor(dst_projection_eval[[col]], -dst_projection_eval$PTs_allw_week)),
+  cor_to_sacks = sapply(dst_projection_metric_cols, function(col) safe_cor(dst_projection_eval[[col]], dst_projection_eval$SACK_def_week)),
+  cor_to_turnovers = sapply(dst_projection_metric_cols, function(col) safe_cor(dst_projection_eval[[col]], dst_projection_eval$DST_Turnovers_week)),
+  cor_to_tds = sapply(dst_projection_metric_cols, function(col) safe_cor(dst_projection_eval[[col]], dst_projection_eval$DST_TDs_week)),
+  cor_to_bigplay = sapply(dst_projection_metric_cols, function(col) safe_cor(dst_projection_eval[[col]], dst_projection_eval$DST_BigPlay_week))
+) %>%
+  dplyr::arrange(dplyr::desc(cor_to_fantasyPts))
+
+dst_eval_split_summary <- tibble::tibble(
+  cohort = c("all_rows", "weeks_1_to_14", "weeks_15_to_18"),
+  cor_profile_to_fantasy = c(
+    safe_cor(dst_projection_eval$DST_Profile_Metric_0to100, dst_projection_eval$DST_Fantasy_Target),
+    safe_cor(dst_projection_eval$DST_Profile_Metric_0to100[dst_projection_eval$WK <= 14], dst_projection_eval$DST_Fantasy_Target[dst_projection_eval$WK <= 14]),
+    safe_cor(dst_projection_eval$DST_Profile_Metric_0to100[dst_projection_eval$WK > 14], dst_projection_eval$DST_Fantasy_Target[dst_projection_eval$WK > 14])
+  ),
+  cor_profile_to_box = c(
+    safe_cor(dst_projection_eval$DST_Profile_Metric_0to100, dst_projection_eval$DST_Box_Fantasy_Target),
+    safe_cor(dst_projection_eval$DST_Profile_Metric_0to100[dst_projection_eval$WK <= 14], dst_projection_eval$DST_Box_Fantasy_Target[dst_projection_eval$WK <= 14]),
+    safe_cor(dst_projection_eval$DST_Profile_Metric_0to100[dst_projection_eval$WK > 14], dst_projection_eval$DST_Box_Fantasy_Target[dst_projection_eval$WK > 14])
+  )
+)
+
+# -------------------------------------------------------------------
+# 8) Review table
+# -------------------------------------------------------------------
+
+dst_projection_summary_final <- dst_projection_eval %>%
+  dplyr::select(
+    Player, TM_DEF, WK,
+    DST_Fantasy_Target,
+    DST_Box_Fantasy_Target,
+    PTs_allw_week,
+    SACK_def_week,
+    DST_Turnovers_week,
+    DST_TDs_week,
+    DST_BigPlay_week,
+    DST_Profile_Metric_0to100,
+    dplyr::any_of(c(
+      "DST_Proj_PtsAllowed",
+      "DST_Proj_Sacks",
+      "DST_Proj_Turnovers",
+      "DST_Proj_BigPlay",
+      "DST_Proj_FantasyPts"
+    ))
+  ) %>%
+  dplyr::arrange(WK, dplyr::desc(DST_Proj_FantasyPts))
+
+
 
