@@ -25511,6 +25511,28 @@ rb_fantasy_projection_comparison <- if (!is.null(rb_model_fantasy_direct)) {
 } else {
   tibble::tibble()
 }
+# -------------------------------------------------------------------
+# 7) Store eval columns on rb_sch_21_avg
+# -------------------------------------------------------------------
+
+rb_eval_cols_to_store <- c(
+  "RB_Proj_Opp",
+  "RB_Proj_CAR",
+  "RB_Proj_TGT_G",
+  "RB_Proj_Scrm_YDs",
+  "RB_Proj_TotTDs",
+  "RB_Proj_FantasyPts"
+)
+
+rb_sch_21_avg <- rb_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::select(-dplyr::any_of(rb_eval_cols_to_store)) %>%
+  dplyr::left_join(
+    rb_projection_eval %>%
+      dplyr::select(Player, TM, WK, dplyr::any_of(rb_eval_cols_to_store)) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE),
+    by = c("Player", "TM", "WK")
+  )
 
 # -------------------------------------------------------------------
 # 7) Eval screens
@@ -28250,6 +28272,26 @@ wr_fantasy_projection_comparison <- if (!is.null(wr_model_fantasy_direct)) {
 } else {
   tibble::tibble()
 }
+# -------------------------------------------------------------------
+# 6) Store eval columns on wr_sch_21_avg
+# -------------------------------------------------------------------
+
+wr_eval_cols_to_store <- c(
+  "WR_Proj_TGT_G",
+  "WR_Proj_RecYDS_G",
+  "WR_Proj_TotTDs",
+  "WR_Proj_FantasyPts"
+)
+
+wr_sch_21_avg <- wr_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::select(-dplyr::any_of(wr_eval_cols_to_store)) %>%
+  dplyr::left_join(
+    wr_projection_eval %>%
+      dplyr::select(Player, TM, WK, dplyr::any_of(wr_eval_cols_to_store)) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE),
+    by = c("Player", "TM", "WK")
+  )
 
 # -------------------------------------------------------------------
 # 6) Eval screens
@@ -31179,6 +31221,26 @@ te_fantasy_projection_comparison <- if (!is.null(te_model_fantasy_direct)) {
 } else {
   tibble::tibble()
 }
+# -------------------------------------------------------------------
+# 7) Store eval columns on te_sch_21_avg
+# -------------------------------------------------------------------
+
+te_eval_cols_to_store <- c(
+  "TE_Proj_TGT_G",
+  "TE_Proj_RecYDS_G",
+  "TE_Proj_TotTDs",
+  "TE_Proj_FantasyPts"
+)
+
+te_sch_21_avg <- te_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::select(-dplyr::any_of(te_eval_cols_to_store)) %>%
+  dplyr::left_join(
+    te_projection_eval %>%
+      dplyr::select(Player, TM, WK, dplyr::any_of(te_eval_cols_to_store)) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE),
+    by = c("Player", "TM", "WK")
+  )
 
 # -------------------------------------------------------------------
 # 7) Eval screens
@@ -33159,6 +33221,27 @@ k_fantasy_projection_comparison <- if (!is.null(k_model_fantasy_direct)) {
 } else {
   tibble::tibble()
 }
+# -------------------------------------------------------------------
+# 7) Store eval columns on k_sch_21_avg
+# -------------------------------------------------------------------
+
+k_eval_cols_to_store <- c(
+  "K_Proj_FGA",
+  "K_Proj_FGM",
+  "K_Proj_LongFGM",
+  "K_Proj_XPMade",
+  "K_Proj_FantasyPts"
+)
+
+k_sch_21_avg <- k_sch_21_avg %>%
+  dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
+  dplyr::select(-dplyr::any_of(k_eval_cols_to_store)) %>%
+  dplyr::left_join(
+    k_projection_eval %>%
+      dplyr::select(Player, TM, WK, dplyr::any_of(k_eval_cols_to_store)) %>%
+      dplyr::distinct(Player, TM, WK, .keep_all = TRUE),
+    by = c("Player", "TM", "WK")
+  )
 
 # -------------------------------------------------------------------
 # 7) Eval screens
