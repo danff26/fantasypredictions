@@ -110,17 +110,26 @@ mk_role_skew <- function(x, labels) {
 }
 
 mk_role_3 <- function(x, labels3 = c("Field Goal Heavy","Kicker Average","No Kicker Required")) {
-  m  <- mean(x, na.rm = TRUE)
-  md <- median(x, na.rm = TRUE)
-  q1 <- quantile(x, 0.25, na.rm = TRUE, type = 7)
-  q3 <- quantile(x, 0.75, na.rm = TRUE, type = 7)
-  mmd <- m - md
+  pos_x <- x[!is.na(x) & x > 0]
+  
+  if (length(pos_x) == 0) {
+    out <- dplyr::case_when(
+      is.na(x) ~ NA_character_,
+      TRUE ~ labels3[3]
+    )
+    return(factor(out, levels = labels3))
+  }
+  
+  q3_pos <- as.numeric(stats::quantile(pos_x, 0.75, na.rm = TRUE, type = 7))
+  
   out <- dplyr::case_when(
-    x >= q3 ~ labels3[1],
-    x >= (m - mmd) & x < q3 ~ labels3[2],
-    x <  (m - mmd) ~ labels3[3],
+    is.na(x) ~ NA_character_,
+    x <= 0 ~ labels3[3],
+    x >= q3_pos ~ labels3[1],
+    x > 0 ~ labels3[2],
     TRUE ~ NA_character_
   )
+  
   factor(out, levels = labels3)
 }
 
@@ -5648,7 +5657,7 @@ team_offense_22_wk3 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 
 #week 4
@@ -5782,7 +5791,7 @@ team_offense_22_wk4 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #week 5
 p <- get("team_pass_metrics_22_wk5", inherits = TRUE)
@@ -5915,7 +5924,7 @@ team_offense_22_wk5 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 
 #week 6
@@ -6049,7 +6058,7 @@ team_offense_22_wk6 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #week 7
 p <- get("team_pass_metrics_22_wk7", inherits = TRUE)
@@ -6182,7 +6191,7 @@ team_offense_22_wk7 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #week 8
 p <- get("team_pass_metrics_22_wk8", inherits = TRUE)
@@ -6315,7 +6324,7 @@ team_offense_22_wk8 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #week 9
 p <- get("team_pass_metrics_22_wk9", inherits = TRUE)
@@ -6448,7 +6457,7 @@ team_offense_22_wk9 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #Week 10
 p <- get("team_pass_metrics_22_wk10", inherits = TRUE)
@@ -6581,7 +6590,7 @@ team_offense_22_wk10 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #week 11
 p <- get("team_pass_metrics_22_wk11", inherits = TRUE)
@@ -6714,7 +6723,7 @@ team_offense_22_wk11 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #week 12
 p <- get("team_pass_metrics_22_wk12", inherits = TRUE)
@@ -6847,7 +6856,7 @@ team_offense_22_wk12 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #week 13
 p <- get("team_pass_metrics_22_wk13", inherits = TRUE)
@@ -6980,7 +6989,7 @@ team_offense_22_wk13 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #week 14
 p <- get("team_pass_metrics_22_wk14", inherits = TRUE)
@@ -7113,7 +7122,7 @@ team_offense_22_wk14 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #week 15
 p <- get("team_pass_metrics_22_wk15", inherits = TRUE)
@@ -7246,7 +7255,7 @@ team_offense_22_wk15 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #week 16
 p <- get("team_pass_metrics_22_wk16", inherits = TRUE)
@@ -7379,7 +7388,7 @@ team_offense_22_wk16 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 
 #week 17
@@ -7513,7 +7522,7 @@ team_offense_22_wk17 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 #week 18
 p <- get("team_pass_metrics_22_wk18", inherits = TRUE)
@@ -7646,7 +7655,7 @@ team_offense_22_wk18 <- p %>%
     Team_Pts_scr_Role = mk_role_skew(Pts_scr, c("Explosive","High Powered","Balance","Ineffective","Stagnant"))
   ) %>%
   # Final cleanup & ordering (your exact two-select finish)
-  dplyr::select(-head_coach_pass,-TM_DEF_pass,-head_coach_rush,-TM_DEF_rush,-head_coach,-Location_pass,-Team.Name_pass) %>%
+  dplyr::select(-dplyr::any_of(c("head_coach_pass","TM_DEF_pass","head_coach_rush","TM_DEF_rush","head_coach","Location_pass","Team.Name_pass"))) %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 
 #team defense merge week 1
