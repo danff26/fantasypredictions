@@ -7659,6 +7659,10 @@ team_offense_22_wk18 <- p %>%
   dplyr::select(Name:BACK_TGT_RATE, pass_yds_pp_rec:xyac_epa_rec, complete19:Team_Pts_scr_Role, Head_Coach, TM_DEF)
 
 #team defense merge week 1
+team_defense_22_wk1 <- team_pass_metrics_22_wk1_def |>
+  dplyr::left_join(team_rush_metrics_def_22_wk1, by = c("Name","TM","SEA","WK"), suffix = c("_pass","_rush")) |>
+  dplyr::left_join(team_rec_metrics_def_22_wk1,  by = c("Name","TM","SEA","WK"), suffix = c("", "_rec"))
+
 team_defense_22_wk1 <- team_defense_22_wk1 |>
   dplyr::mutate(G = 1L) |>
   dplyr::select(
@@ -21216,13 +21220,7 @@ qb_sch_22 <- qb_sch_22 |>
     )
   ) %>%
   ungroup() |>
-  select(Player:QB_CAR_PCT_Role, QB_YDS_Rush_PCT_Role, report_status:gameday) |>
-  left_join(
-    qb_adv_22 |>
-      select(Player, TM, POS, G, SEA, WK, FB_DB) |>
-      distinct(),
-    by = c("Player", "TM", "POS", "G", "SEA", "WK")
-  ) |>
+  select(Player:QB_CAR_PCT_Role, QB_YDS_Rush_PCT_Role, FB_DB, report_status:gameday)|>
   mutate(
     mean_FB_DB = mean(FB_DB, na.rm = TRUE),
     median_FB_DB = median(FB_DB, na.rm = TRUE),
@@ -21242,13 +21240,207 @@ qb_sch_22 <- qb_sch_22 |>
     )
   ) %>%
   ungroup() |>
-  select(Player:QB_YDS_Rush_PCT_Role, QB_FB_DB_Role, report_status:gameday)
+  select(Player:QB_YDS_Rush_PCT_Role, FB_DB, QB_FB_DB_Role, report_status:gameday)
 
 qb_22 <- qb_sch_22 |>
-  select(Player:XFP_G) |>
+  relocate(FB_DB, .before = XFP_G) |>
+  select(Player:XFP_G, QB_FB_DB_Role, report_status:gameday)
+
+excluded_cols_qb <- c("Player","age","TM","POS","SEA","WK","depth_team","report_status","practice_primary_injury","practice_secondary_injury","practice_status","birth_date","rookie_year",
+                      "TM_draft","round","pick","Ht","Wt","forty","bench","vertical","broad_jump","cone","shuttle")
+factor_columns_qb <- c("QB_Depth_Role","Draft_Day","Pass_Vol_Role","QB_Pass_Eff_Role","QB_Pass_Style_Role","QB_Pass_Acc_Role","QB_TO_Role","QB_RATE_Role","QB_forty_Role","QB_bench_Role",
+                       "QB_vertical_Role","QB_broad_jump_Role","QB_cone_Role","QB_shuttle_Role","QB_PRESS_TO_SK_Role","QB_CAR_PCT_Role","QB_YDS_Rush_PCT_Role","QB_FB_DB_Role")
+games_played_qb <- qb_22 %>%
+  group_by(Player) %>%
+  summarise(G = n_distinct(WK), .groups = "drop")
+
+total_stats_qb <- qb_22 %>%
+  group_by(Player) %>%
+  summarise(
+    across(
+      .cols = setdiff(names(qb_22)[sapply(qb_22, is.numeric)], excluded_cols_qb),
+      .fns = ~ sum(.x, na.rm = TRUE),
+      .names = "total_{.col}"
+    ),
+    .groups = "drop"
+  )
+
+avg_stats_qb <- total_stats_qb %>%
+  left_join(games_played_qb, by = "Player") %>%
+  mutate(
+    across(
+      starts_with("total_"),
+      .fns = ~ round(.x / G, 2),
+      .names = "avg_{.col}"
+    )
+  ) %>%
+  select(-starts_with("total_"))
+
+qb_22_avg <- qb_22 %>%
+  left_join(avg_stats_qb, by = "Player")
+
+qb_22 <- qb_22_avg|>
+  rename(G = G.x,G_total = G.y)|>
+  select(-avg_total_G)|> 
+  mutate(mean_DB = mean(avg_total_DB_ply, na.rm = TRUE),
+         median_DB = median(avg_total_DB_ply, na.rm = TRUE),
+         q1 = quantile(avg_total_DB_ply, 0.25, na.rm = TRUE),
+         q3 = quantile(avg_total_DB_ply, 0.75, na.rm = TRUE),
+         median_mean_diff = median_DB - mean_DB)|>
+  group_by(avg_total_DB_ply)|>
+  mutate(Pass_Vol_Role_avg = factor(ifelse(avg_total_DB_ply >= q3, "High Volume Passer",
+                                           ifelse(avg_total_DB_ply >= median_mean_diff + mean_DB & avg_total_DB_ply < q3, "Volume Passer",
+                                                  ifelse(avg_total_DB_ply >= (mean_DB - median_mean_diff) & avg_total_DB_ply < mean_DB + median_mean_diff, "League Average",
+                                                         ifelse(avg_total_DB_ply >= q1 & avg_total_DB_ply < (mean_DB - median_mean_diff), "Lesser Volume",
+                                                                ifelse(avg_total_DB_ply < q1, "Pass Anemic", NA)))))
+  )) %>%
+  ungroup()|>
+  select(Player:G_total,Pass_Vol_Role_avg,avg_total_DB_ply:avg_total_XFP_G)|>
+  mutate(mean_YPA = mean(avg_total_YPA, na.rm = TRUE),
+         median_YPA = median(avg_total_YPA, na.rm = TRUE),
+         q1 = quantile(avg_total_YPA, 0.25, na.rm = TRUE),
+         q3 = quantile(avg_total_YPA, 0.75, na.rm = TRUE),
+         median_mean_diff = mean_YPA - median_YPA)|>
+  group_by(avg_total_YPA)|>
+  mutate(QB_Pass_Eff_Role_avg = factor(ifelse(avg_total_YPA >= q3, "Elite Efficient",
+                                              ifelse(avg_total_YPA > mean_YPA + median_mean_diff & avg_total_YPA < q3, "Efficient",
+                                                     ifelse(avg_total_YPA >= (mean_YPA - median_mean_diff) & avg_total_YPA < mean_YPA + median_mean_diff, "League Average",
+                                                            ifelse(avg_total_YPA >= q1 & avg_total_YPA < (mean_YPA - median_mean_diff), "Inefficent",
+                                                                   ifelse(avg_total_YPA < q1, "Subpar", NA))))), levels = c("Elite Efficient","Efficient","League Average","Inefficent","Subpar")
+  )) %>%
+  ungroup()|>
+  select(Player:Pass_Vol_Role_avg,QB_Pass_Eff_Role_avg,avg_total_DB_ply:avg_total_XFP_G)|>
+  mutate(mean_aDOT = mean(avg_total_aDOT, na.rm = TRUE),
+         median_aDOT = median(avg_total_aDOT, na.rm = TRUE),
+         q1 = quantile(avg_total_aDOT, 0.25, na.rm = TRUE),
+         q3 = quantile(avg_total_aDOT, 0.75, na.rm = TRUE),
+         median_mean_diff = median_aDOT - mean_aDOT)|>
+  group_by(avg_total_aDOT)|>
+  mutate(QB_Pass_Style_Role_avg = factor(ifelse(avg_total_aDOT >= q3, "Vertical",
+                                                ifelse(avg_total_aDOT >= median_aDOT & avg_total_aDOT < q3, "Aggresive",
+                                                       ifelse(avg_total_aDOT >= (mean_aDOT - median_mean_diff) & avg_total_aDOT < median_aDOT, "League Average",
+                                                              ifelse(avg_total_aDOT >= q1 & avg_total_aDOT < (mean_aDOT - median_mean_diff), "Short Attack",
+                                                                     ifelse(avg_total_aDOT < q1, "Dink and Dunk", NA))))), levels = c("Vertical","Aggresive","League Average","Short Attack","Dink and Dunk")
+  )) %>%
+  ungroup()|>
+  select(Player:QB_Pass_Eff_Role_avg,QB_Pass_Style_Role_avg,avg_total_DB_ply:avg_total_XFP_G)|> 
+  mutate(mean_ADJ_CMP_PCT = mean(avg_total_ADJ_CMP_PCT, na.rm = TRUE),
+         median_ADJ_CMP_PCT = median(avg_total_ADJ_CMP_PCT, na.rm = TRUE),
+         q1 = quantile(avg_total_ADJ_CMP_PCT, 0.25, na.rm = TRUE),
+         q3 = quantile(avg_total_ADJ_CMP_PCT, 0.75, na.rm = TRUE),
+         median_mean_diff = mean_ADJ_CMP_PCT - median_ADJ_CMP_PCT)|>
+  group_by(avg_total_ADJ_CMP_PCT)|>
+  mutate(QB_Pass_Acc_Role_avg = factor(ifelse(avg_total_ADJ_CMP_PCT >= q3, "Pin Point",
+                                              ifelse(avg_total_ADJ_CMP_PCT >= mean_ADJ_CMP_PCT + median_mean_diff & avg_total_ADJ_CMP_PCT < q3, "Accurate",
+                                                     ifelse(avg_total_ADJ_CMP_PCT >= (mean_ADJ_CMP_PCT - median_mean_diff) & avg_total_ADJ_CMP_PCT < mean_ADJ_CMP_PCT + median_mean_diff, "League Average",
+                                                            ifelse(avg_total_ADJ_CMP_PCT >= q1 & avg_total_ADJ_CMP_PCT < (mean_ADJ_CMP_PCT - median_mean_diff), "Inaccurate",
+                                                                   ifelse(avg_total_ADJ_CMP_PCT < q1, "Wild Location", NA))))), levels = c("Pin Point","Accurate","League Average","Inaccurate","Wild Location")
+  )) %>%
+  ungroup()|>
+  select(Player:QB_Pass_Style_Role_avg,QB_Pass_Acc_Role_avg,avg_total_DB_ply:avg_total_XFP_G)|>
+  mutate(mean_TO = mean(avg_total_TO, na.rm = TRUE),
+         median_TO = median(avg_total_TO, na.rm = TRUE),
+         q1 = quantile(avg_total_TO, 0.25, na.rm = TRUE),
+         q3 = quantile(avg_total_TO, 0.75, na.rm = TRUE),
+         median_mean_diff = median_TO - mean_TO)|>
+  group_by(avg_total_TO)|>
+  mutate(QB_TO_Role_avg = factor(ifelse(avg_total_TO >= q3, "High TO",
+                                        ifelse(avg_total_TO >= median_TO & avg_total_TO < q3, "TO Prone",
+                                               ifelse(avg_total_TO >= (mean_TO - median_mean_diff) & avg_total_TO < median_TO, "Average TO",
+                                                      ifelse(avg_total_TO >= q1 & avg_total_TO < (mean_TO - median_mean_diff), "Limit TO",
+                                                             ifelse(avg_total_TO < q1, "Careful with the Ball", NA))))), levels = c("High TO","TO Prone","Average TO","Limit TO","Careful with the Ball")
+  )) %>%
+  ungroup()|>
+  select(Player:QB_Pass_Acc_Role_avg,QB_TO_Role_avg,avg_total_DB_ply:avg_total_XFP_G)|>
+  mutate(mean_RATE = mean(avg_total_RATE, na.rm = TRUE),
+         median_RATE = median(avg_total_RATE, na.rm = TRUE),
+         q1 = quantile(avg_total_RATE, 0.25, na.rm = TRUE),
+         q3 = quantile(avg_total_RATE, 0.75, na.rm = TRUE),
+         median_mean_diff = median_RATE - mean_RATE)|>
+  group_by(avg_total_RATE)|>
+  mutate(QB_RATE_Role_avg = factor(ifelse(avg_total_RATE >= q3, "Elite",
+                                          ifelse(avg_total_RATE >= median_RATE & avg_total_RATE < q3, "Poised",
+                                                 ifelse(avg_total_RATE >= (mean_RATE - median_mean_diff) & avg_total_RATE < median_RATE, "Average",
+                                                        ifelse(avg_total_RATE >= q1 & avg_total_RATE < (mean_RATE - median_mean_diff), "Inconsistent",
+                                                               ifelse(avg_total_RATE < q1, "Erratic", NA))))), levels = c("Elite","Poised","Average","Inconsistent","Erratic")
+  )) %>%
+  ungroup()|>
+  select(Player:QB_TO_Role_avg,QB_RATE_Role_avg,avg_total_DB_ply:avg_total_XFP_G)|>
+  mutate(mean_PRESS_TO_SK = mean(avg_total_PRESS_TO_SK, na.rm = TRUE),
+         median_PRESS_TO_SK = median(avg_total_PRESS_TO_SK, na.rm = TRUE),
+         q1 = quantile(avg_total_PRESS_TO_SK, 0.25, na.rm = TRUE),
+         q3 = quantile(avg_total_PRESS_TO_SK, 0.75, na.rm = TRUE),
+         median_mean_diff = mean_PRESS_TO_SK - median_PRESS_TO_SK)|>
+  group_by(avg_total_PRESS_TO_SK)|>
+  mutate(QB_PRESS_TO_SK_Role_avg = factor(ifelse(avg_total_PRESS_TO_SK >= q3, "Sack Prone",
+                                                 ifelse(avg_total_PRESS_TO_SK >= mean_PRESS_TO_SK + median_mean_diff & avg_total_PRESS_TO_SK < q3, "Pressure Sensitive",
+                                                        ifelse(avg_total_PRESS_TO_SK >= (mean_PRESS_TO_SK - median_mean_diff) & avg_total_PRESS_TO_SK < mean_PRESS_TO_SK + median_mean_diff, "Average",
+                                                               ifelse(avg_total_PRESS_TO_SK >= q1 & avg_total_PRESS_TO_SK < (mean_PRESS_TO_SK - median_mean_diff), "Pressure Resistant",
+                                                                      ifelse(avg_total_PRESS_TO_SK < q1, "Composed", NA))))), levels = c("Composed","Pressure Resistant","Average","Pressure Sensitive","Sack Prone")
+  )) %>%
+  ungroup()|>
+  select(Player:QB_RATE_Role_avg,QB_PRESS_TO_SK_Role_avg,avg_total_DB_ply:avg_total_XFP_G)|>
+  mutate(mean_CAR_PCT = mean(avg_total_CAR_PCT, na.rm = TRUE),
+         median_CAR_PCT = median(avg_total_CAR_PCT, na.rm = TRUE),
+         q1 = quantile(avg_total_CAR_PCT, 0.25, na.rm = TRUE),
+         q3 = quantile(avg_total_CAR_PCT, 0.75, na.rm = TRUE),
+         median_mean_diff = mean_CAR_PCT - median_CAR_PCT)|>
+  group_by(avg_total_CAR_PCT)|>
+  mutate(QB_CAR_PCT_Role_avg = factor(ifelse(avg_total_CAR_PCT >= q3, "Workhorse",
+                                             ifelse(avg_total_CAR_PCT >= mean_CAR_PCT + median_mean_diff & avg_total_CAR_PCT < q3, "Primary Rusher",
+                                                    ifelse(avg_total_CAR_PCT >= (mean_CAR_PCT - median_mean_diff) & avg_total_CAR_PCT < mean_CAR_PCT + median_mean_diff, "Average",
+                                                           ifelse(avg_total_CAR_PCT >= q1 & avg_total_CAR_PCT < (mean_CAR_PCT - median_mean_diff), "Situational Carrier",
+                                                                  ifelse(avg_total_CAR_PCT < q1, "Limited Carrier", NA))))), levels = c("Workhorse","Primary Rusher","Average","Situational Carrier","Limited Carrier")
+  )) %>%
+  ungroup()|>
+  select(Player:QB_PRESS_TO_SK_Role_avg,QB_CAR_PCT_Role_avg,avg_total_DB_ply:avg_total_XFP_G)|>
+  mutate(mean_YDS_Rush_PCT = mean(avg_total_YDS_Rush_PCT, na.rm = TRUE),
+         median_YDS_Rush_PCT = median(avg_total_YDS_Rush_PCT, na.rm = TRUE),
+         q1 = quantile(avg_total_YDS_Rush_PCT, 0.25, na.rm = TRUE),
+         q3 = quantile(avg_total_YDS_Rush_PCT, 0.75, na.rm = TRUE),
+         median_mean_diff = mean_YDS_Rush_PCT - median_YDS_Rush_PCT)|>
+  group_by(avg_total_YDS_Rush_PCT)|>
+  mutate(QB_YDS_Rush_PCT_Role_avg = factor(ifelse(avg_total_YDS_Rush_PCT >= q3, "Featured",
+                                                  ifelse(avg_total_YDS_Rush_PCT >= mean_YDS_Rush_PCT + median_mean_diff & avg_total_YDS_Rush_PCT < q3, "Heavy Lifter",
+                                                         ifelse(avg_total_YDS_Rush_PCT >= (mean_YDS_Rush_PCT - median_mean_diff) & avg_total_YDS_Rush_PCT < mean_YDS_Rush_PCT + median_mean_diff, "Average",
+                                                                ifelse(avg_total_YDS_Rush_PCT >= q1 & avg_total_YDS_Rush_PCT < (mean_YDS_Rush_PCT - median_mean_diff), "Situational Rusher",
+                                                                       ifelse(avg_total_YDS_Rush_PCT < q1, "Limited Rusher", NA))))), levels = c("Featured","Heavy Lifter","Average","Situational Rusher","Limited Rusher")
+  )) %>%
+  ungroup()|>
+  select(Player:QB_CAR_PCT_Role_avg,QB_YDS_Rush_PCT_Role_avg,avg_total_DB_ply:avg_total_XFP_G)|>
+  mutate(mean_FB_DB = mean(avg_total_FB_DB, na.rm = TRUE),
+         median_FB_DB = median(avg_total_FB_DB, na.rm = TRUE),
+         q1 = quantile(avg_total_FB_DB, 0.25, na.rm = TRUE),
+         q3 = quantile(avg_total_FB_DB, 0.75, na.rm = TRUE),
+         median_mean_diff = mean_FB_DB - median_FB_DB)|>
+  group_by(avg_total_FB_DB)|>
+  mutate(QB_FB_DB_Role_avg = factor(ifelse(avg_total_FB_DB >= q3, "High Yield",
+                                           ifelse(avg_total_FB_DB >= median_FB_DB & avg_total_FB_DB < q3, "Playmaking QB",
+                                                  ifelse(avg_total_FB_DB >= (mean_FB_DB - median_mean_diff) & avg_total_FB_DB < median_FB_DB, "Average",
+                                                         ifelse(avg_total_FB_DB >= q1 & avg_total_FB_DB < (mean_FB_DB - median_mean_diff), "Non Playmaking",
+                                                                ifelse(avg_total_FB_DB < q1, "Low Yield", NA))))), levels = c("High Yield","Playmaking QB","Average","Non Playmaking","Low Yield")
+  )) %>%
+  ungroup()|>
+  select(Player:QB_YDS_Rush_PCT_Role_avg,QB_FB_DB_Role_avg,avg_total_DB_ply:avg_total_XFP_G)
+
+qb_22_avg <- qb_22 |>
+  select(
+    Player:SEA,
+    depth_team:Draft_Day,
+    QB_forty_Role:QB_shuttle_Role,
+    report_status:shuttle,
+    Pass_Vol_Role_avg:avg_total_XFP_G
+  ) |>
   distinct(Player, TM, SEA, .keep_all = TRUE)
 
+off_coach_col <- intersect(c("Head_Coach", "Head_Coach_off", "Head_Coach_OFF"), names(Team_schedule_matchups_22))[1]
+def_coach_col <- intersect(c("Head_Coach_DEF", "Head_Coach_def", "Head_Coach_DEF_DEF"), names(Team_schedule_matchups_22))[1]
+
 Team_schedule_matchups_22_avg <- Team_schedule_matchups_22 |>
+  mutate(
+    Head_Coach = .data[[off_coach_col]],
+    Head_Coach_DEF = .data[[def_coach_col]]
+  ) |>
   select(
     Name:SEA,
     Head_Coach,
@@ -21414,7 +21606,7 @@ qb_metric_targets_22 <- qb_sch_22 %>%
     dplyr::any_of(c("ATT", "YDS_G", "TD", "RuYDS_G", "TD_rush", "INT", "TO"))
   )
 
-qb_metric_df <- qb_sch_22_avg %>%
+qb_metric_df_22 <- qb_sch_22_avg %>%
   dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
   dplyr::arrange(Player, TM, WK) %>%
   dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
@@ -21425,7 +21617,7 @@ qb_metric_df <- qb_sch_22_avg %>%
 # 2) Feature scoring
 # -------------------------------------------------------------------
 
-positive_numeric_features <- intersect(
+positive_numeric_features_22 <- intersect(
   c(
     "avg_total_FP",
     "avg_total_XFP",
@@ -21451,18 +21643,18 @@ positive_numeric_features <- intersect(
     "avg_total_RZ_opp",
     "avg_total_EZTGT_off"
   ),
-  names(qb_metric_df)
+  names(qb_metric_df_22)
 )
 
-risk_numeric_features <- intersect(
+risk_numeric_features_22 <- intersect(
   c(
     "avg_total_INT",
     "avg_total_TO"
   ),
-  names(qb_metric_df)
+  names(qb_metric_df_22)
 )
 
-role_features <- intersect(
+role_features_22 <- intersect(
   c(
     "QB_Depth_Role",
     "Pass_Vol_Role_avg",
@@ -21476,34 +21668,34 @@ role_features <- intersect(
     "Team_RZ_Role_avg",
     "QB_TO_Role_avg"
   ),
-  names(qb_metric_df)
+  names(qb_metric_df_22)
 )
 
-for (col in positive_numeric_features) {
-  qb_metric_df[[paste0("score_", col)]] <- pct_score(qb_metric_df[[col]], inverse = FALSE)
+for (col in positive_numeric_features_22) {
+  qb_metric_df_22[[paste0("score_", col)]] <- pct_score(qb_metric_df_22[[col]], inverse = FALSE)
 }
 
-for (col in risk_numeric_features) {
-  qb_metric_df[[paste0("score_", col)]] <- pct_score(qb_metric_df[[col]], inverse = TRUE)
-  qb_metric_df[[paste0("risk_score_", col)]] <- pct_score(qb_metric_df[[col]], inverse = FALSE)
+for (col in risk_numeric_features_22) {
+  qb_metric_df_22[[paste0("score_", col)]] <- pct_score(qb_metric_df_22[[col]], inverse = TRUE)
+  qb_metric_df_22[[paste0("risk_score_", col)]] <- pct_score(qb_metric_df_22[[col]], inverse = FALSE)
 }
 
-for (col in role_features) {
-  qb_metric_df[[paste0("score_", col)]] <- role_score_from_target(qb_metric_df[[col]], qb_metric_df$FP)
+for (col in role_features_22) {
+  qb_metric_df_22[[paste0("score_", col)]] <- role_score_from_target(qb_metric_df_22[[col]], qb_metric_df_22$FP)
 }
 
 # -------------------------------------------------------------------
 # 3) Veteran fantasy groups
 # -------------------------------------------------------------------
 
-qb_metric_df$QB_History_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_History_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c("score_avg_total_FP", "score_avg_total_XFP"),
   "FP"
 )
 
-qb_metric_df$QB_Pass_Volume_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_Pass_Volume_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c(
     "score_avg_total_OPP",
     "score_avg_total_DB_ply",
@@ -21514,8 +21706,8 @@ qb_metric_df$QB_Pass_Volume_Metric_0to100 <- build_group_score(
   "FP"
 )
 
-qb_metric_df$QB_Passing_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_Passing_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c(
     "score_avg_total_YDS_G",
     "score_avg_total_AY",
@@ -21531,8 +21723,8 @@ qb_metric_df$QB_Passing_Metric_0to100 <- build_group_score(
   "FP"
 )
 
-qb_metric_df$QB_Rushing_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_Rushing_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c(
     "score_avg_total_CAR_PCT",
     "score_avg_total_YDS_Rush_PCT",
@@ -21545,8 +21737,8 @@ qb_metric_df$QB_Rushing_Metric_0to100 <- build_group_score(
   "FP"
 )
 
-qb_metric_df$QB_Team_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_Team_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c(
     "score_avg_total_Pts_scr",
     "score_avg_total_RZ_opp",
@@ -21557,8 +21749,8 @@ qb_metric_df$QB_Team_Metric_0to100 <- build_group_score(
   "FP"
 )
 
-qb_metric_df$QB_Risk_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_Risk_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c(
     "score_avg_total_TO",
     "score_QB_TO_Role_avg"
@@ -21570,8 +21762,8 @@ qb_metric_df$QB_Risk_Metric_0to100 <- build_group_score(
 # 4) Component metrics for props
 # -------------------------------------------------------------------
 
-qb_metric_df$QB_Pass_Yards_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_Pass_Yards_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c(
     "score_avg_total_YDS_G",
     "score_avg_total_AY",
@@ -21587,8 +21779,8 @@ qb_metric_df$QB_Pass_Yards_Metric_0to100 <- build_group_score(
   "FP"
 )
 
-qb_metric_df$QB_Pass_TD_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_Pass_TD_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c(
     "score_avg_total_TD",
     "score_avg_total_TD_Rate",
@@ -21603,8 +21795,8 @@ qb_metric_df$QB_Pass_TD_Metric_0to100 <- build_group_score(
   "FP"
 )
 
-qb_metric_df$QB_Rush_Yards_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_Rush_Yards_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c(
     "score_avg_total_CAR_PCT",
     "score_avg_total_YDS_Rush_PCT",
@@ -21617,8 +21809,8 @@ qb_metric_df$QB_Rush_Yards_Metric_0to100 <- build_group_score(
   "FP"
 )
 
-qb_metric_df$QB_Rush_TD_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_Rush_TD_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c(
     "score_avg_total_TD_rush",
     "score_avg_total_TD_rush_Rate",
@@ -21630,8 +21822,8 @@ qb_metric_df$QB_Rush_TD_Metric_0to100 <- build_group_score(
   "FP"
 )
 
-qb_metric_df$QB_Team_Context_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_Team_Context_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c(
     "score_avg_total_Pts_scr",
     "score_avg_total_RZ_opp",
@@ -21642,28 +21834,28 @@ qb_metric_df$QB_Team_Context_Metric_0to100 <- build_group_score(
   "FP"
 )
 
-int_target_col <- if ("INT" %in% names(qb_metric_df)) {
+int_target_col_22 <- if ("INT" %in% names(qb_metric_df_22)) {
   "INT"
-} else if ("TO" %in% names(qb_metric_df)) {
+} else if ("TO" %in% names(qb_metric_df_22)) {
   "TO"
 } else {
   "FP"
 }
 
-qb_metric_df$QB_INT_Risk_Metric_0to100 <- build_group_score(
-  qb_metric_df,
+qb_metric_df_22$QB_INT_Risk_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
   c(
     "risk_score_avg_total_INT",
     "risk_score_avg_total_TO"
   ),
-  int_target_col
+  int_target_col_22
 )
 
 # -------------------------------------------------------------------
 # 5) Official fantasy metric + prop blends
 # -------------------------------------------------------------------
 
-qb_fantasy_base_weights <- c(
+qb_fantasy_base_weights_22 <- c(
   QB_History_Metric_0to100 = 0.28,
   QB_Pass_Volume_Metric_0to100 = 0.24,
   QB_Passing_Metric_0to100 = 0.24,
@@ -21671,56 +21863,56 @@ qb_fantasy_base_weights <- c(
   QB_Team_Metric_0to100 = 0.10
 )
 
-qb_metric_df$QB_Fantasy_Base_Metric_0to100 <- build_weighted_metric(
-  qb_metric_df,
-  qb_fantasy_base_weights
+qb_metric_df_22$QB_Fantasy_Base_Metric_0to100 <- build_weighted_metric(
+  qb_metric_df_22,
+  qb_fantasy_base_weights_22
 )
 
-qb_metric_df$QB_Fantasy_Base_Grade <- grade_from_score(
-  qb_metric_df$QB_Fantasy_Base_Metric_0to100
+qb_metric_df_22$QB_Fantasy_Base_Grade <- grade_from_score(
+  qb_metric_df_22$QB_Fantasy_Base_Metric_0to100
 )
 
-qb_pass_props_weights <- c(
+qb_pass_props_weights_22 <- c(
   QB_Pass_Volume_Metric_0to100 = 0.38,
   QB_Pass_Yards_Metric_0to100 = 0.32,
   QB_Pass_TD_Metric_0to100 = 0.20,
   QB_Team_Context_Metric_0to100 = 0.10
 )
 
-qb_rush_props_weights <- c(
+qb_rush_props_weights_22 <- c(
   QB_Rush_Yards_Metric_0to100 = 0.60,
   QB_Rush_TD_Metric_0to100 = 0.25,
   QB_History_Metric_0to100 = 0.15
 )
 
-qb_td_props_weights <- c(
+qb_td_props_weights_22 <- c(
   QB_Pass_TD_Metric_0to100 = 0.55,
   QB_Rush_TD_Metric_0to100 = 0.25,
   QB_Team_Context_Metric_0to100 = 0.20
 )
 
-qb_metric_df$QB_Pass_Props_Metric_0to100 <- build_weighted_metric(
-  qb_metric_df,
-  qb_pass_props_weights
+qb_metric_df_22$QB_Pass_Props_Metric_0to100 <- build_weighted_metric(
+  qb_metric_df_22,
+  qb_pass_props_weights_22
 )
 
-qb_metric_df$QB_Rush_Props_Metric_0to100 <- build_weighted_metric(
-  qb_metric_df,
-  qb_rush_props_weights
+qb_metric_df_22$QB_Rush_Props_Metric_0to100 <- build_weighted_metric(
+  qb_metric_df_22,
+  qb_rush_props_weights_22
 )
 
-qb_metric_df$QB_TD_Props_Metric_0to100 <- build_weighted_metric(
-  qb_metric_df,
-  qb_td_props_weights
+qb_metric_df_22$QB_TD_Props_Metric_0to100 <- build_weighted_metric(
+  qb_metric_df_22,
+  qb_td_props_weights_22
 )
 
-qb_metric_df$QB_INT_Props_Risk_Metric_0to100 <- qb_metric_df$QB_INT_Risk_Metric_0to100
+qb_metric_df_22$QB_INT_Props_Risk_Metric_0to100 <- qb_metric_df_22$QB_INT_Risk_Metric_0to100
 
 # -------------------------------------------------------------------
 # 6) Matchup metric
 # -------------------------------------------------------------------
 
-qb_matchup_positive_numeric <- intersect(
+qb_matchup_positive_numeric_22 <- intersect(
   c(
     "avg_total_TD_pass_def",
     "avg_total_AY_def",
@@ -21730,87 +21922,87 @@ qb_matchup_positive_numeric <- intersect(
     "avg_total_RZ_Pass_Run_def",
     "avg_total_PTs_allw"
   ),
-  names(qb_metric_df)
+  names(qb_metric_df_22)
 )
 
-qb_matchup_inverse_numeric <- intersect(
+qb_matchup_inverse_numeric_22 <- intersect(
   c(
     "avg_total_INT_def"
   ),
-  names(qb_metric_df)
+  names(qb_metric_df_22)
 )
 
-for (col in qb_matchup_positive_numeric) {
-  qb_metric_df[[paste0("matchup_score_", col)]] <- pct_score(qb_metric_df[[col]], inverse = FALSE)
+for (col in qb_matchup_positive_numeric_22) {
+  qb_metric_df_22[[paste0("matchup_score_", col)]] <- pct_score(qb_metric_df_22[[col]], inverse = FALSE)
 }
 
-for (col in qb_matchup_inverse_numeric) {
-  qb_metric_df[[paste0("matchup_score_", col)]] <- pct_score(qb_metric_df[[col]], inverse = TRUE)
+for (col in qb_matchup_inverse_numeric_22) {
+  qb_metric_df_22[[paste0("matchup_score_", col)]] <- pct_score(qb_metric_df_22[[col]], inverse = TRUE)
 }
 
-qb_matchup_pass_ease_score_cols <- intersect(
+qb_matchup_pass_ease_score_cols_22 <- intersect(
   c(
     "matchup_score_avg_total_TD_pass_def",
     "matchup_score_avg_total_AY_def",
     "matchup_score_avg_total_DEEP_THROW_ATT_def",
     "matchup_score_avg_total_YDS_pass_def"
   ),
-  names(qb_metric_df)
+  names(qb_metric_df_22)
 )
 
-qb_matchup_game_script_score_cols <- intersect(
+qb_matchup_game_script_score_cols_22 <- intersect(
   c(
     "matchup_score_avg_total_PrROE_def",
     "matchup_score_avg_total_RZ_Pass_Run_def",
     "matchup_score_avg_total_PTs_allw"
   ),
-  names(qb_metric_df)
+  names(qb_metric_df_22)
 )
 
-qb_matchup_risk_avoidance_score_cols <- intersect(
+qb_matchup_risk_avoidance_score_cols_22 <- intersect(
   c(
     "matchup_score_avg_total_INT_def"
   ),
-  names(qb_metric_df)
+  names(qb_metric_df_22)
 )
 
-qb_metric_df$QB_Matchup_Pass_Ease_Metric_0to100 <- build_group_score(
-  qb_metric_df,
-  qb_matchup_pass_ease_score_cols,
+qb_metric_df_22$QB_Matchup_Pass_Ease_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
+  qb_matchup_pass_ease_score_cols_22,
   "FP"
 )
 
-qb_metric_df$QB_Matchup_Game_Script_Metric_0to100 <- build_group_score(
-  qb_metric_df,
-  qb_matchup_game_script_score_cols,
+qb_metric_df_22$QB_Matchup_Game_Script_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
+  qb_matchup_game_script_score_cols_22,
   "FP"
 )
 
-qb_metric_df$QB_Matchup_Risk_Avoidance_Metric_0to100 <- build_group_score(
-  qb_metric_df,
-  qb_matchup_risk_avoidance_score_cols,
+qb_metric_df_22$QB_Matchup_Risk_Avoidance_Metric_0to100 <- build_group_score(
+  qb_metric_df_22,
+  qb_matchup_risk_avoidance_score_cols_22,
   "FP"
 )
 
-qb_matchup_final_weights <- c(
+qb_matchup_final_weights_22 <- c(
   QB_Matchup_Pass_Ease_Metric_0to100 = 0.45,
   QB_Matchup_Game_Script_Metric_0to100 = 0.55
 )
 
-qb_metric_df$QB_Matchup_Metric_0to100 <- build_weighted_metric(
-  qb_metric_df,
-  qb_matchup_final_weights
+qb_metric_df_22$QB_Matchup_Metric_0to100 <- build_weighted_metric(
+  qb_metric_df_22,
+  qb_matchup_final_weights_22
 )
 
-qb_metric_df$QB_Matchup_Grade <- grade_from_score(
-  qb_metric_df$QB_Matchup_Metric_0to100
+qb_metric_df_22$QB_Matchup_Grade <- grade_from_score(
+  qb_metric_df_22$QB_Matchup_Metric_0to100
 )
 
 # -------------------------------------------------------------------
 # 7) Store final veteran + matchup columns on qb_sch_22_avg
 # -------------------------------------------------------------------
 
-qb_cols_to_store <- c(
+qb_cols_to_store_22 <- c(
   "QB_History_Metric_0to100",
   "QB_Pass_Volume_Metric_0to100",
   "QB_Passing_Metric_0to100",
@@ -21838,10 +22030,10 @@ qb_cols_to_store <- c(
 
 qb_sch_22_avg <- qb_sch_22_avg %>%
   dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
-  dplyr::select(-dplyr::any_of(qb_cols_to_store)) %>%
+  dplyr::select(-dplyr::any_of(qb_cols_to_store_22)) %>%
   dplyr::left_join(
-    qb_metric_df %>%
-      dplyr::select(Player, TM, WK, dplyr::any_of(qb_cols_to_store)) %>%
+    qb_metric_df_22 %>%
+      dplyr::select(Player, TM, WK, dplyr::any_of(qb_cols_to_store_22)) %>%
       dplyr::distinct(Player, TM, WK, .keep_all = TRUE),
     by = c("Player", "TM", "WK")
   )
@@ -21850,7 +22042,7 @@ qb_sch_22_avg <- qb_sch_22_avg %>%
 # 8) Optional review tables
 # -------------------------------------------------------------------
 
-qb_matchup_signal <- tibble::tibble(
+qb_matchup_signal_22 <- tibble::tibble(
   metric = c(
     "QB_Matchup_Pass_Ease_Metric_0to100",
     "QB_Matchup_Game_Script_Metric_0to100",
@@ -21859,15 +22051,15 @@ qb_matchup_signal <- tibble::tibble(
   )
 ) %>%
   dplyr::mutate(
-    cor_to_fp = sapply(metric, function(col) safe_cor(qb_metric_df[[col]], qb_metric_df$FP)),
-    cor_to_att = sapply(metric, function(col) if ("ATT" %in% names(qb_metric_df)) safe_cor(qb_metric_df[[col]], qb_metric_df$ATT) else NA_real_),
-    cor_to_pass_yds = sapply(metric, function(col) if ("YDS_G" %in% names(qb_metric_df)) safe_cor(qb_metric_df[[col]], qb_metric_df$YDS_G) else NA_real_),
-    cor_to_pass_td = sapply(metric, function(col) if ("TD" %in% names(qb_metric_df)) safe_cor(qb_metric_df[[col]], qb_metric_df$TD) else NA_real_),
-    cor_to_int = sapply(metric, function(col) if ("INT" %in% names(qb_metric_df)) safe_cor(qb_metric_df[[col]], qb_metric_df$INT) else NA_real_)
+    cor_to_fp = sapply(metric, function(col) safe_cor(qb_metric_df_22[[col]], qb_metric_df_22$FP)),
+    cor_to_att = sapply(metric, function(col) if ("ATT" %in% names(qb_metric_df_22)) safe_cor(qb_metric_df_22[[col]], qb_metric_df_22$ATT) else NA_real_),
+    cor_to_pass_yds = sapply(metric, function(col) if ("YDS_G" %in% names(qb_metric_df_22)) safe_cor(qb_metric_df_22[[col]], qb_metric_df_22$YDS_G) else NA_real_),
+    cor_to_pass_td = sapply(metric, function(col) if ("TD" %in% names(qb_metric_df_22)) safe_cor(qb_metric_df_22[[col]], qb_metric_df_22$TD) else NA_real_),
+    cor_to_int = sapply(metric, function(col) if ("INT" %in% names(qb_metric_df_22)) safe_cor(qb_metric_df_22[[col]], qb_metric_df_22$INT) else NA_real_)
   ) %>%
   dplyr::arrange(dplyr::desc(cor_to_fp))
 
-qb_metric_summary_final <- qb_metric_df %>%
+qb_metric_summary_final_22 <- qb_metric_df_22 %>%
   dplyr::select(
     Player, TM, WK, FP, XFP,
     dplyr::any_of(c(
@@ -21900,7 +22092,7 @@ qb_metric_summary_final <- qb_metric_df %>%
 # This stores a separate rookie prospect metric on qb_sch_22_avg.
 # It does NOT override the official in-season QB fantasy base metric.
 
-qb_metric_df <- qb_metric_df %>%
+qb_metric_df_22 <- qb_metric_df_22 %>%
   dplyr::mutate(
     QB_Is_Rookie = ifelse(
       !is.na(rookie_year) &
@@ -21915,7 +22107,7 @@ qb_metric_df <- qb_metric_df %>%
   )
 
 # Rookie-safe numeric scores
-rookie_numeric_plan_final <- tibble::tribble(
+rookie_numeric_plan_final_22 <- tibble::tribble(
   ~feature,      ~inverse,
   "round",        TRUE,
   "pick",         TRUE,
@@ -21925,16 +22117,16 @@ rookie_numeric_plan_final <- tibble::tribble(
   "broad_jump",   FALSE,
   "shuttle",      TRUE
 ) %>%
-  dplyr::filter(feature %in% names(qb_metric_df))
+  dplyr::filter(feature %in% names(qb_metric_df_22))
 
-for (i in seq_len(nrow(rookie_numeric_plan_final))) {
-  col <- rookie_numeric_plan_final$feature[i]
-  inv <- rookie_numeric_plan_final$inverse[i]
-  qb_metric_df[[paste0("rookie_score_", col)]] <- pct_score(qb_metric_df[[col]], inverse = inv)
+for (i in seq_len(nrow(rookie_numeric_plan_final_22))) {
+  col <- rookie_numeric_plan_final_22$feature[i]
+  inv <- rookie_numeric_plan_final_22$inverse[i]
+  qb_metric_df_22[[paste0("rookie_score_", col)]] <- pct_score(qb_metric_df_22[[col]], inverse = inv)
 }
 
 # Rookie-safe role scores
-rookie_role_features_final <- intersect(
+rookie_role_features_final_22 <- intersect(
   c(
     "Draft_Day",
     "QB_Depth_Role",
@@ -21944,16 +22136,16 @@ rookie_role_features_final <- intersect(
     "QB_shuttle_Role",
     "Team_Pts_scr_Role_avg"
   ),
-  names(qb_metric_df)
+  names(qb_metric_df_22)
 )
 
-for (col in rookie_role_features_final) {
-  qb_metric_df[[paste0("rookie_score_", col)]] <- role_score_from_target(qb_metric_df[[col]], qb_metric_df$FP)
+for (col in rookie_role_features_final_22) {
+  qb_metric_df_22[[paste0("rookie_score_", col)]] <- role_score_from_target(qb_metric_df_22[[col]], qb_metric_df_22$FP)
 }
 
 # Rookie sub-metrics
-qb_metric_df$QB_Rookie_Draft_Metric_0to100 <- build_weighted_metric(
-  qb_metric_df,
+qb_metric_df_22$QB_Rookie_Draft_Metric_0to100 <- build_weighted_metric(
+  qb_metric_df_22,
   c(
     rookie_score_Draft_Day = 0.45,
     rookie_score_round = 0.15,
@@ -21961,8 +22153,8 @@ qb_metric_df$QB_Rookie_Draft_Metric_0to100 <- build_weighted_metric(
   )
 )
 
-qb_metric_df$QB_Rookie_Athleticism_Metric_0to100 <- build_weighted_metric(
-  qb_metric_df,
+qb_metric_df_22$QB_Rookie_Athleticism_Metric_0to100 <- build_weighted_metric(
+  qb_metric_df_22,
   c(
     rookie_score_QB_shuttle_Role = 0.30,
     rookie_score_QB_vertical_Role = 0.25,
@@ -21971,24 +22163,24 @@ qb_metric_df$QB_Rookie_Athleticism_Metric_0to100 <- build_weighted_metric(
   )
 )
 
-qb_metric_df$QB_Rookie_Opportunity_Metric_0to100 <- build_weighted_metric(
-  qb_metric_df,
+qb_metric_df_22$QB_Rookie_Opportunity_Metric_0to100 <- build_weighted_metric(
+  qb_metric_df_22,
   c(
     rookie_score_QB_Depth_Role = 0.75,
     rookie_score_depth_team = 0.25
   )
 )
 
-qb_metric_df$QB_Rookie_Context_Metric_0to100 <- build_weighted_metric(
-  qb_metric_df,
+qb_metric_df_22$QB_Rookie_Context_Metric_0to100 <- build_weighted_metric(
+  qb_metric_df_22,
   c(
     rookie_score_Team_Pts_scr_Role_avg = 1.00
   )
 )
 
 # Final rookie prospect metric
-qb_metric_df$QB_Rookie_Prospect_Metric_0to100 <- build_weighted_metric(
-  qb_metric_df,
+qb_metric_df_22$QB_Rookie_Prospect_Metric_0to100 <- build_weighted_metric(
+  qb_metric_df_22,
   c(
     QB_Rookie_Opportunity_Metric_0to100 = 0.45,
     QB_Rookie_Athleticism_Metric_0to100 = 0.25,
@@ -21997,8 +22189,8 @@ qb_metric_df$QB_Rookie_Prospect_Metric_0to100 <- build_weighted_metric(
   )
 )
 
-qb_metric_df$QB_Rookie_Prospect_Grade <- grade_from_score(
-  qb_metric_df$QB_Rookie_Prospect_Metric_0to100
+qb_metric_df_22$QB_Rookie_Prospect_Grade <- grade_from_score(
+  qb_metric_df_22$QB_Rookie_Prospect_Metric_0to100
 )
 
 # Store rookie columns back on qb_sch_22_avg
@@ -22017,14 +22209,14 @@ qb_sch_22_avg <- qb_sch_22_avg %>%
   dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
   dplyr::select(-dplyr::any_of(qb_rookie_cols_to_store)) %>%
   dplyr::left_join(
-    qb_metric_df %>%
+    qb_metric_df_22 %>%
       dplyr::select(Player, TM, WK, dplyr::any_of(qb_rookie_cols_to_store)) %>%
       dplyr::distinct(Player, TM, WK, .keep_all = TRUE),
     by = c("Player", "TM", "WK")
   )
 
 # Optional review table
-qb_rookie_summary_final <- qb_metric_df %>%
+qb_rookie_summary_final_22 <- qb_metric_df_22 %>%
   dplyr::filter(QB_Is_Rookie == 1L | QB_Rookie_Starter_Flag == 1L) %>%
   dplyr::select(
     Player, TM, WK, FP, XFP,
@@ -22169,7 +22361,7 @@ qb_scoring <- list(
 )
 
 # 1) Build eval source table
-qb_weekly_targets_eval <- qb_sch_22 %>%
+qb_weekly_targets_eval_22 <- qb_sch_22 %>%
   dplyr::mutate(WK = suppressWarnings(as.integer(WK))) %>%
   dplyr::arrange(Player, TM, WK, dplyr::desc(FP)) %>%
   dplyr::distinct(Player, TM, WK, .keep_all = TRUE) %>%
@@ -22178,30 +22370,30 @@ qb_weekly_targets_eval <- qb_sch_22 %>%
     ATT, YDS_G, TD, RuYDS_G, TD_rush, INT, FP, XFP
   )
 
-qb_avg_eval_base <- qb_sch_22_avg %>%
+qb_avg_eval_base_22 <- qb_sch_22_avg %>%
   dplyr::mutate(WK = suppressWarnings(as.integer(WK)))
 
-avg_has_weekly_rows <- "WK" %in% names(qb_avg_eval_base) &&
-  dplyr::n_distinct(paste(qb_avg_eval_base$Player, qb_avg_eval_base$TM, qb_avg_eval_base$WK, sep = "|")) >
-  dplyr::n_distinct(paste(qb_avg_eval_base$Player, qb_avg_eval_base$TM, sep = "|"))
+avg_has_weekly_rows_22 <- "WK" %in% names(qb_avg_eval_base_22) &&
+  dplyr::n_distinct(paste(qb_avg_eval_base_22$Player, qb_avg_eval_base_22$TM, qb_avg_eval_base_22$WK, sep = "|")) >
+  dplyr::n_distinct(paste(qb_avg_eval_base_22$Player, qb_avg_eval_base_22$TM, sep = "|"))
 
-join_keys <- if (avg_has_weekly_rows) c("Player", "TM", "WK") else c("Player", "TM")
+join_keys_22 <- if (avg_has_weekly_rows_22) c("Player", "TM", "WK") else c("Player", "TM")
 
-qb_avg_eval_join <- if (avg_has_weekly_rows) {
-  qb_avg_eval_base %>%
+qb_avg_eval_join_22 <- if (avg_has_weekly_rows_22) {
+  qb_avg_eval_base_22 %>%
     dplyr::arrange(Player, TM, WK) %>%
     dplyr::distinct(Player, TM, WK, .keep_all = TRUE)
 } else {
-  qb_avg_eval_base %>%
+  qb_avg_eval_base_22 %>%
     dplyr::arrange(Player, TM) %>%
     dplyr::distinct(Player, TM, .keep_all = TRUE)
 }
 
-qb_projection_eval <- qb_weekly_targets_eval %>%
+qb_projection_eval_22 <- qb_weekly_targets_eval_22 %>%
   dplyr::left_join(
-    qb_avg_eval_join %>%
+    qb_avg_eval_join_22 %>%
       dplyr::select(
-        dplyr::all_of(join_keys),
+        dplyr::all_of(join_keys_22),
         dplyr::any_of(c(
           "QB_History_Metric_0to100",
           "QB_Pass_Volume_Metric_0to100",
@@ -22222,24 +22414,24 @@ qb_projection_eval <- qb_weekly_targets_eval %>%
           "QB_INT_Props_Risk_Metric_0to100"
         ))
       ),
-    by = join_keys
+    by = join_keys_22
   ) %>%
   dplyr::mutate(row_id = dplyr::row_number())
 
 # 2) Time split
-qb_train_projection <- qb_projection_eval %>% dplyr::filter(WK <= 14)
-qb_test_projection  <- qb_projection_eval %>% dplyr::filter(WK > 14)
+qb_train_projection_22 <- qb_projection_eval_22 %>% dplyr::filter(WK <= 14)
+qb_test_projection_22  <- qb_projection_eval_22 %>% dplyr::filter(WK > 14)
 
-if (nrow(qb_train_projection) == 0 || nrow(qb_test_projection) == 0) {
+if (nrow(qb_train_projection_22) == 0 || nrow(qb_test_projection_22) == 0) {
   set.seed(2026)
-  idx <- sample(seq_len(nrow(qb_projection_eval)), size = floor(0.8 * nrow(qb_projection_eval)))
-  qb_train_projection <- qb_projection_eval[idx, ]
-  qb_test_projection  <- qb_projection_eval[-idx, ]
+  idx <- sample(seq_len(nrow(qb_projection_eval_22)), size = floor(0.8 * nrow(qb_projection_eval_22)))
+  qb_train_projection_22 <- qb_projection_eval_22[idx, ]
+  qb_test_projection_22  <- qb_projection_eval_22[-idx, ]
 }
 
 # 3) Keeper projection models
-qb_model_ATT <- fit_target_model(
-  qb_train_projection, qb_test_projection, qb_projection_eval,
+qb_model_ATT_22 <- fit_target_model(
+  qb_train_projection_22, qb_test_projection_22, qb_projection_eval_22,
   target = "ATT",
   features = c(
     "QB_Pass_Volume_Metric_0to100",
@@ -22249,8 +22441,8 @@ qb_model_ATT <- fit_target_model(
   clip_zero = TRUE
 )
 
-qb_model_YDS_G <- fit_target_model(
-  qb_train_projection, qb_test_projection, qb_projection_eval,
+qb_model_YDS_G_22 <- fit_target_model(
+  qb_train_projection_22, qb_test_projection_22, qb_projection_eval_22,
   target = "YDS_G",
   features = c(
     "QB_Pass_Volume_Metric_0to100",
@@ -22260,8 +22452,8 @@ qb_model_YDS_G <- fit_target_model(
   clip_zero = TRUE
 )
 
-qb_model_TD <- fit_target_model(
-  qb_train_projection, qb_test_projection, qb_projection_eval,
+qb_model_TD_22 <- fit_target_model(
+  qb_train_projection_22, qb_test_projection_22, qb_projection_eval_22,
   target = "TD",
   features = c(
     "QB_Passing_Metric_0to100",
@@ -22271,8 +22463,8 @@ qb_model_TD <- fit_target_model(
   clip_zero = TRUE
 )
 
-qb_model_RuYDS_G <- fit_target_model(
-  qb_train_projection, qb_test_projection, qb_projection_eval,
+qb_model_RuYDS_G_22 <- fit_target_model(
+  qb_train_projection_22, qb_test_projection_22, qb_projection_eval_22,
   target = "RuYDS_G",
   features = c(
     "QB_Rush_Yards_Metric_0to100",
@@ -22281,59 +22473,90 @@ qb_model_RuYDS_G <- fit_target_model(
   clip_zero = TRUE
 )
 
-qb_model_TD_rush <- fit_target_model(
-  qb_train_projection, qb_test_projection, qb_projection_eval,
+qb_model_TD_rush_22 <- fit_target_model(
+  qb_train_projection_22, qb_test_projection_22, qb_projection_eval_22,
   target = "TD_rush",
   features = c("QB_Rushing_Metric_0to100"),
   clip_zero = TRUE
 )
 
-qb_model_INT <- fit_target_model(
-  qb_train_projection, qb_test_projection, qb_projection_eval,
+qb_model_INT_22 <- fit_target_model(
+  qb_train_projection_22, qb_test_projection_22, qb_projection_eval_22,
   target = "INT",
   features = c("QB_INT_Props_Risk_Metric_0to100"),
   clip_zero = TRUE
 )
 
 # clean direct FP benchmark
-qb_model_FP_direct <- fit_target_model(
-  qb_train_projection, qb_test_projection, qb_projection_eval,
+qb_model_FP_direct_22 <- fit_target_model(
+  qb_train_projection_22, qb_test_projection_22, qb_projection_eval_22,
   target = "FP",
   features = c("QB_History_Metric_0to100"),
   clip_zero = TRUE
 )
 
-qb_projection_models <- list(
-  ATT = qb_model_ATT,
-  YDS_G = qb_model_YDS_G,
-  TD = qb_model_TD,
-  RuYDS_G = qb_model_RuYDS_G,
-  TD_rush = qb_model_TD_rush,
-  INT = qb_model_INT,
-  FP_direct = qb_model_FP_direct
+qb_projection_models_22 <- list(
+  ATT = qb_model_ATT_22,
+  YDS_G = qb_model_YDS_G_22,
+  TD = qb_model_TD_22,
+  RuYDS_G = qb_model_RuYDS_G_22,
+  TD_rush = qb_model_TD_rush_22,
+  INT = qb_model_INT_22,
+  FP_direct = qb_model_FP_direct_22
 )
 
 # 4) Metrics and VIF
-qb_projection_model_metrics <- dplyr::bind_rows(
-  lapply(qb_projection_models, function(x) x$metrics)
+qb_projection_model_metrics_22 <- dplyr::bind_rows(
+  lapply(qb_projection_models_22, function(x) if (!is.null(x)) x$metrics)
 ) %>%
   dplyr::arrange(target)
 
-qb_projection_model_vif <- dplyr::bind_rows(
-  lapply(qb_projection_models, function(x) x$vif)
+qb_projection_model_vif_22 <- dplyr::bind_rows(
+  lapply(qb_projection_models_22, function(x) if (!is.null(x)) x$vif)
 ) %>%
   dplyr::arrange(target, dplyr::desc(vif))
 
 # 5) Full-table predictions
-qb_projection_eval$QB_Proj_ATT <- qb_model_ATT$pred_full
-qb_projection_eval$QB_Proj_PassYds <- qb_model_YDS_G$pred_full
-qb_projection_eval$QB_Proj_PassTD <- qb_model_TD$pred_full
-qb_projection_eval$QB_Proj_RushYds <- qb_model_RuYDS_G$pred_full
-qb_projection_eval$QB_Proj_RushTD <- qb_model_TD_rush$pred_full
-qb_projection_eval$QB_Proj_INT <- qb_model_INT$pred_full
-qb_projection_eval$QB_Proj_FP_Direct <- qb_model_FP_direct$pred_full
+qb_projection_eval_22 <- qb_projection_eval_22 %>%
+  dplyr::mutate(
+    QB_Proj_ATT = NA_real_,
+    QB_Proj_PassYds = NA_real_,
+    QB_Proj_PassTD = NA_real_,
+    QB_Proj_RushYds = NA_real_,
+    QB_Proj_RushTD = NA_real_,
+    QB_Proj_INT = NA_real_,
+    QB_Proj_FP_Direct = NA_real_
+  )
 
-qb_projection_eval <- qb_projection_eval %>%
+if (!is.null(qb_model_ATT_22)) {
+  qb_projection_eval_22$QB_Proj_ATT <- qb_model_ATT_22$pred_full
+}
+
+if (!is.null(qb_model_YDS_G_22)) {
+  qb_projection_eval_22$QB_Proj_PassYds <- qb_model_YDS_G_22$pred_full
+}
+
+if (!is.null(qb_model_TD_22)) {
+  qb_projection_eval_22$QB_Proj_PassTD <- qb_model_TD_22$pred_full
+}
+
+if (!is.null(qb_model_RuYDS_G_22)) {
+  qb_projection_eval_22$QB_Proj_RushYds <- qb_model_RuYDS_G_22$pred_full
+}
+
+if (!is.null(qb_model_TD_rush_22)) {
+  qb_projection_eval_22$QB_Proj_RushTD <- qb_model_TD_rush_22$pred_full
+}
+
+if (!is.null(qb_model_INT_22)) {
+  qb_projection_eval_22$QB_Proj_INT <- qb_model_INT_22$pred_full
+}
+
+if (!is.null(qb_model_FP_direct_22)) {
+  qb_projection_eval_22$QB_Proj_FP_Direct <- qb_model_FP_direct_22$pred_full
+}
+
+qb_projection_eval_22 <- qb_projection_eval_22 %>%
   dplyr::mutate(
     QB_Proj_FP_From_Stats =
       QB_Proj_PassYds * qb_scoring$pass_yd +
@@ -22344,37 +22567,37 @@ qb_projection_eval <- qb_projection_eval %>%
   )
 
 # 6) Test-set fantasy-point comparison
-test_ids <- qb_test_projection$row_id
+test_ids_22 <- qb_test_projection_22$row_id
 
-qb_test_projection_with_preds <- qb_projection_eval %>%
-  dplyr::filter(row_id %in% test_ids)
+qb_test_projection_with_preds_22 <- qb_projection_eval_22 %>%
+  dplyr::filter(row_id %in% test_ids_22)
 
-qb_fp_projection_comparison <- tibble::tibble(
+qb_fp_projection_comparison_22 <- tibble::tibble(
   fp_projection_type = c(
     "QB_Proj_FP_From_Stats",
     "QB_Proj_FP_Direct"
   ),
   rmse = c(
-    rmse(qb_test_projection_with_preds$FP, qb_test_projection_with_preds$QB_Proj_FP_From_Stats),
-    rmse(qb_test_projection_with_preds$FP, qb_test_projection_with_preds$QB_Proj_FP_Direct)
+    rmse(qb_test_projection_with_preds_22$FP, qb_test_projection_with_preds_22$QB_Proj_FP_From_Stats),
+    rmse(qb_test_projection_with_preds_22$FP, qb_test_projection_with_preds_22$QB_Proj_FP_Direct)
   ),
   mae = c(
-    mae(qb_test_projection_with_preds$FP, qb_test_projection_with_preds$QB_Proj_FP_From_Stats),
-    mae(qb_test_projection_with_preds$FP, qb_test_projection_with_preds$QB_Proj_FP_Direct)
+    mae(qb_test_projection_with_preds_22$FP, qb_test_projection_with_preds_22$QB_Proj_FP_From_Stats),
+    mae(qb_test_projection_with_preds_22$FP, qb_test_projection_with_preds_22$QB_Proj_FP_Direct)
   ),
   r2 = c(
-    rsq(qb_test_projection_with_preds$FP, qb_test_projection_with_preds$QB_Proj_FP_From_Stats),
-    rsq(qb_test_projection_with_preds$FP, qb_test_projection_with_preds$QB_Proj_FP_Direct)
+    rsq(qb_test_projection_with_preds_22$FP, qb_test_projection_with_preds_22$QB_Proj_FP_From_Stats),
+    rsq(qb_test_projection_with_preds_22$FP, qb_test_projection_with_preds_22$QB_Proj_FP_Direct)
   ),
   correlation = c(
-    safe_cor(qb_test_projection_with_preds$FP, qb_test_projection_with_preds$QB_Proj_FP_From_Stats),
-    safe_cor(qb_test_projection_with_preds$FP, qb_test_projection_with_preds$QB_Proj_FP_Direct)
+    safe_cor(qb_test_projection_with_preds_22$FP, qb_test_projection_with_preds_22$QB_Proj_FP_From_Stats),
+    safe_cor(qb_test_projection_with_preds_22$FP, qb_test_projection_with_preds_22$QB_Proj_FP_Direct)
   )
 ) %>%
   dplyr::arrange(rmse)
 
 # 7) Optional target screen for the chosen metrics
-projection_metric_cols <- c(
+projection_metric_cols_22 <- c(
   "QB_History_Metric_0to100",
   "QB_Pass_Volume_Metric_0to100",
   "QB_Pass_Yards_Metric_0to100",
@@ -22387,21 +22610,21 @@ projection_metric_cols <- c(
   "QB_Fantasy_Base_Metric_0to100"
 )
 
-projection_metric_cols <- projection_metric_cols[projection_metric_cols %in% names(qb_projection_eval)]
+projection_metric_cols_22 <- projection_metric_cols_22[projection_metric_cols_22 %in% names(qb_projection_eval_22)]
 
-qb_projection_target_screen <- tibble::tibble(
-  metric = projection_metric_cols,
-  cor_to_ATT = sapply(projection_metric_cols, function(col) safe_cor(qb_projection_eval[[col]], qb_projection_eval$ATT)),
-  cor_to_YDS_G = sapply(projection_metric_cols, function(col) safe_cor(qb_projection_eval[[col]], qb_projection_eval$YDS_G)),
-  cor_to_TD = sapply(projection_metric_cols, function(col) safe_cor(qb_projection_eval[[col]], qb_projection_eval$TD)),
-  cor_to_RuYDS_G = sapply(projection_metric_cols, function(col) safe_cor(qb_projection_eval[[col]], qb_projection_eval$RuYDS_G)),
-  cor_to_TD_rush = sapply(projection_metric_cols, function(col) safe_cor(qb_projection_eval[[col]], qb_projection_eval$TD_rush)),
-  cor_to_INT = sapply(projection_metric_cols, function(col) safe_cor(qb_projection_eval[[col]], qb_projection_eval$INT)),
-  cor_to_FP = sapply(projection_metric_cols, function(col) safe_cor(qb_projection_eval[[col]], qb_projection_eval$FP))
+qb_projection_target_screen_22 <- tibble::tibble(
+  metric = projection_metric_cols_22,
+  cor_to_ATT = sapply(projection_metric_cols_22, function(col) safe_cor(qb_projection_eval_22[[col]], qb_projection_eval_22$ATT)),
+  cor_to_YDS_G = sapply(projection_metric_cols_22, function(col) safe_cor(qb_projection_eval_22[[col]], qb_projection_eval_22$YDS_G)),
+  cor_to_TD = sapply(projection_metric_cols_22, function(col) safe_cor(qb_projection_eval_22[[col]], qb_projection_eval_22$TD)),
+  cor_to_RuYDS_G = sapply(projection_metric_cols_22, function(col) safe_cor(qb_projection_eval_22[[col]], qb_projection_eval_22$RuYDS_G)),
+  cor_to_TD_rush = sapply(projection_metric_cols_22, function(col) safe_cor(qb_projection_eval_22[[col]], qb_projection_eval_22$TD_rush)),
+  cor_to_INT = sapply(projection_metric_cols_22, function(col) safe_cor(qb_projection_eval_22[[col]], qb_projection_eval_22$INT)),
+  cor_to_FP = sapply(projection_metric_cols_22, function(col) safe_cor(qb_projection_eval_22[[col]], qb_projection_eval_22$FP))
 )
 
 # 8) Review table
-qb_projection_summary_final <- qb_projection_eval %>%
+qb_projection_summary_final_22 <- qb_projection_eval_22 %>%
   dplyr::select(
     Player, TM, WK,
     ATT, YDS_G, TD, RuYDS_G, TD_rush, INT, FP,
@@ -22419,30 +22642,101 @@ qb_projection_summary_final <- qb_projection_eval %>%
 
 
 #RB #combine the RBs pass and rec stats 
-rb_rush_adv_22_wk1 <- read.csv("~/NFLfastR/2022 Data/Rush 2022 WK1.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk1 <- read.csv("~/NFLfastR/2022 Data/Rec 2022 WK1.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk1 <- rb_rush_adv_22_wk1|>
-  left_join(rb_rec_adv_22_wk1, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-Rank_rush,-Rank_rec,-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk1 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 1.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+rb_rec_adv_22_wk1 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 1.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+rb_adv_22_wk1 <- rb_rush_adv_22_wk1 |>
+  left_join(
+    rb_rec_adv_22_wk1,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 1L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
 rb_adv_22_wk1[is.na(rb_adv_22_wk1)] <- 0
 rb_adv_22_wk1 <- rb_adv_22_wk1|>
   rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
@@ -22455,11 +22749,9 @@ rb_depth_22_wk1 <- depth_charts_22_wk1|>
          TM = ifelse(TM == "HST","HOU",TM),
          TM = ifelse(TM == "BLT",'BAL',TM),
          TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk1 <- rb_adv_22_wk1|>
-  left_join(rb_depth_22_wk1,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:POS,SEA,WK,G,depth_team,CAR:RecXFP)
+rb_adv_22_wk1 <- rb_adv_22_wk1 |>
+  left_join(rb_depth_22_wk1, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
 rb_adv_22_wk1[is.na(rb_adv_22_wk1)] <- 3
 rb_injuries_wk1 <- injuries_weekly_22_wk1|>
   filter(POS %in% c("RB","FB"))
@@ -22471,916 +22763,2399 @@ rb_adv_22_wk1 <- rb_adv_22_wk1 |>
          practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
          practice_status = ifelse(is.na(practice_status),"Full",practice_status))
 #wk2
-rb_rush_adv_22_wk2 <- read.csv("~/NFLfastR/2022 Data/Rush RB wk2 22.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk2 <- read.csv("~/NFLfastR/2022 Data/RB Rec 22 wk2.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk2 <- rb_rush_adv_22_wk2|>
-  left_join(rb_rec_adv_22_wk2, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk2 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 2.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk2 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 2.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk2 <- rb_rush_adv_22_wk2 |>
+  left_join(
+    rb_rec_adv_22_wk2,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 2L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk2[is.na(rb_adv_22_wk2)] <- 0
-rb_adv_22_wk2 <- rb_adv_22_wk2|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk2 <- depth_charts_22_wk2|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk2 <- rb_adv_22_wk2|>
-  left_join(rb_depth_22_wk2,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk2[is.na(rb_adv_22_wk2)] <- 3
-rb_injuries_wk2 <- injuries_weekly_22_wk2|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk2 <- rb_adv_22_wk2 |>
-  left_join(rb_injuries_wk2,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk2 <- depth_charts_22_wk2 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk2 <- rb_adv_22_wk2 |>
+  left_join(rb_depth_22_wk2, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk2[is.na(rb_adv_22_wk2)] <- 3
+
+rb_injuries_wk2 <- injuries_weekly_22_wk2 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk2 <- rb_adv_22_wk2 |>
+  left_join(rb_injuries_wk2, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 3 figure out why WK is missing
-rb_rush_adv_22_wk3 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk3.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk3 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 3.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk3 <- rb_rush_adv_22_wk3|>
-  left_join(rb_rec_adv_22_wk3, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk3 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 3.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk3 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 3.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk3 <- rb_rush_adv_22_wk3 |>
+  left_join(
+    rb_rec_adv_22_wk3,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 3L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk3[is.na(rb_adv_22_wk3)] <- 0
-rb_adv_22_wk3 <- rb_adv_22_wk3|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk3 <- depth_charts_22_wk3|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk3 <- rb_adv_22_wk3|>
-  left_join(rb_depth_22_wk3,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk3[is.na(rb_adv_22_wk3)] <- 3
-rb_injuries_wk3 <- injuries_weekly_22_wk3|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk3 <- rb_adv_22_wk3 |>
-  left_join(rb_injuries_wk3,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk3 <- depth_charts_22_wk3 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk3 <- rb_adv_22_wk3 |>
+  left_join(rb_depth_22_wk3, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk3[is.na(rb_adv_22_wk3)] <- 3
+
+rb_injuries_wk3 <- injuries_weekly_22_wk3 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk3 <- rb_adv_22_wk3 |>
+  left_join(rb_injuries_wk3, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 4
-rb_rush_adv_22_wk4 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 4.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk4 <- read.csv("~/NFLfastR/2022 Data/RB Rec 22 WK4.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk4 <- rb_rush_adv_22_wk4|>
-  left_join(rb_rec_adv_22_wk4, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk4 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 4.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk4 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 4.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk4 <- rb_rush_adv_22_wk4 |>
+  left_join(
+    rb_rec_adv_22_wk4,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 4L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk4[is.na(rb_adv_22_wk4)] <- 0
-rb_adv_22_wk4 <- rb_adv_22_wk4|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk4 <- depth_charts_22_wk4|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk4 <- rb_adv_22_wk4|>
-  left_join(rb_depth_22_wk4,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk4[is.na(rb_adv_22_wk4)] <- 3
-rb_injuries_wk4 <- injuries_weekly_22_wk4|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk4 <- rb_adv_22_wk4 |>
-  left_join(rb_injuries_wk4,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk4 <- depth_charts_22_wk4 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk4 <- rb_adv_22_wk4 |>
+  left_join(rb_depth_22_wk4, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk4[is.na(rb_adv_22_wk4)] <- 3
+
+rb_injuries_wk4 <- injuries_weekly_22_wk4 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk4 <- rb_adv_22_wk4 |>
+  left_join(rb_injuries_wk4, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 5
-rb_rush_adv_22_wk5 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk5.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk5 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 5.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk5 <- rb_rush_adv_22_wk5|>
-  left_join(rb_rec_adv_22_wk5, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk5 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 5.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk5 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 5.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk5 <- rb_rush_adv_22_wk5 |>
+  left_join(
+    rb_rec_adv_22_wk5,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 5L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk5[is.na(rb_adv_22_wk5)] <- 0
-rb_adv_22_wk5 <- rb_adv_22_wk5|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk5 <- depth_charts_22_wk5|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk5 <- rb_adv_22_wk5|>
-  left_join(rb_depth_22_wk5,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk5[is.na(rb_adv_22_wk5)] <- 3
-rb_injuries_wk5 <- injuries_weekly_22_wk5|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk5 <- rb_adv_22_wk5 |>
-  left_join(rb_injuries_wk5,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk5 <- depth_charts_22_wk5 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk5 <- rb_adv_22_wk5 |>
+  left_join(rb_depth_22_wk5, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk5[is.na(rb_adv_22_wk5)] <- 3
+
+rb_injuries_wk5 <- injuries_weekly_22_wk5 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk5 <- rb_adv_22_wk5 |>
+  left_join(rb_injuries_wk5, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 6
-rb_rush_adv_22_wk6 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 6.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk6 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk6.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk6 <- rb_rush_adv_22_wk6|>
-  left_join(rb_rec_adv_22_wk6, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk6 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 6.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk6 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 6.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk6 <- rb_rush_adv_22_wk6 |>
+  left_join(
+    rb_rec_adv_22_wk6,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 6L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk6[is.na(rb_adv_22_wk6)] <- 0
-rb_adv_22_wk6 <- rb_adv_22_wk6|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk6 <- depth_charts_22_wk6|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk6 <- rb_adv_22_wk6|>
-  left_join(rb_depth_22_wk6,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk6[is.na(rb_adv_22_wk6)] <- 3
-rb_injuries_wk6 <- injuries_weekly_22_wk6|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk6 <- rb_adv_22_wk6 |>
-  left_join(rb_injuries_wk6,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk6 <- depth_charts_22_wk6 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk6 <- rb_adv_22_wk6 |>
+  left_join(rb_depth_22_wk6, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk6[is.na(rb_adv_22_wk6)] <- 3
+
+rb_injuries_wk6 <- injuries_weekly_22_wk6 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk6 <- rb_adv_22_wk6 |>
+  left_join(rb_injuries_wk6, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 7
-rb_rush_adv_22_wk7 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 7.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk7 <- read.csv("~/NFLfastR/2022 Data/rb rec 22 wk 7.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk7 <- rb_rush_adv_22_wk7|>
-  left_join(rb_rec_adv_22_wk7, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk7 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 7.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk7 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 7.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk7 <- rb_rush_adv_22_wk7 |>
+  left_join(
+    rb_rec_adv_22_wk7,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 7L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk7[is.na(rb_adv_22_wk7)] <- 0
-rb_adv_22_wk7 <- rb_adv_22_wk7|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk7 <- depth_charts_22_wk7|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk7 <- rb_adv_22_wk7|>
-  left_join(rb_depth_22_wk7,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk7[is.na(rb_adv_22_wk7)] <- 3
-rb_injuries_wk7 <- injuries_weekly_22_wk7|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk7 <- rb_adv_22_wk7 |>
-  left_join(rb_injuries_wk7,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk7 <- depth_charts_22_wk7 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk7 <- rb_adv_22_wk7 |>
+  left_join(rb_depth_22_wk7, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk7[is.na(rb_adv_22_wk7)] <- 3
+
+rb_injuries_wk7 <- injuries_weekly_22_wk7 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk7 <- rb_adv_22_wk7 |>
+  left_join(rb_injuries_wk7, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 8
-rb_rush_adv_22_wk8 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk8.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk8 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 8.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk8 <- rb_rush_adv_22_wk8|>
-  left_join(rb_rec_adv_22_wk8, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk8 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 8.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk8 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 8.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk8 <- rb_rush_adv_22_wk8 |>
+  left_join(
+    rb_rec_adv_22_wk8,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 8L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk8[is.na(rb_adv_22_wk8)] <- 0
-rb_adv_22_wk8 <- rb_adv_22_wk8|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk8 <- depth_charts_22_wk8|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk8 <- rb_adv_22_wk8|>
-  left_join(rb_depth_22_wk8,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk8[is.na(rb_adv_22_wk8)] <- 3
-rb_injuries_wk8 <- injuries_weekly_22_wk8|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk8 <- rb_adv_22_wk8 |>
-  left_join(rb_injuries_wk8,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk8 <- depth_charts_22_wk8 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk8 <- rb_adv_22_wk8 |>
+  left_join(rb_depth_22_wk8, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk8[is.na(rb_adv_22_wk8)] <- 3
+
+rb_injuries_wk8 <- injuries_weekly_22_wk8 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk8 <- rb_adv_22_wk8 |>
+  left_join(rb_injuries_wk8, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 9
-rb_rush_adv_22_wk9 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 9.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk9 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk9.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk9 <- rb_rush_adv_22_wk9|>
-  left_join(rb_rec_adv_22_wk9, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk9 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 9.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk9 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 9.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk9 <- rb_rush_adv_22_wk9 |>
+  left_join(
+    rb_rec_adv_22_wk9,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 9L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk9[is.na(rb_adv_22_wk9)] <- 0
-rb_adv_22_wk9 <- rb_adv_22_wk9|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk9 <- depth_charts_22_wk9|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk9 <- rb_adv_22_wk9|>
-  left_join(rb_depth_22_wk9,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk9[is.na(rb_adv_22_wk9)] <- 3
-rb_injuries_wk9 <- injuries_weekly_22_wk9|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk9 <- rb_adv_22_wk9 |>
-  left_join(rb_injuries_wk9,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk9 <- depth_charts_22_wk9 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk9 <- rb_adv_22_wk9 |>
+  left_join(rb_depth_22_wk9, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk9[is.na(rb_adv_22_wk9)] <- 3
+
+rb_injuries_wk9 <- injuries_weekly_22_wk9 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk9 <- rb_adv_22_wk9 |>
+  left_join(rb_injuries_wk9, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 10
-rb_rush_adv_22_wk10 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 10.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk10 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 10.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk10 <- rb_rush_adv_22_wk10|>
-  left_join(rb_rec_adv_22_wk10, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk10 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 10.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk10 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 10.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk10 <- rb_rush_adv_22_wk10 |>
+  left_join(
+    rb_rec_adv_22_wk10,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 10L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk10[is.na(rb_adv_22_wk10)] <- 0
-rb_adv_22_wk10 <- rb_adv_22_wk10|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk10 <- depth_charts_22_wk10|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk10 <- rb_adv_22_wk10|>
-  left_join(rb_depth_22_wk10,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk10[is.na(rb_adv_22_wk10)] <- 3
-rb_injuries_wk10 <- injuries_weekly_22_wk10|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk10 <- rb_adv_22_wk10 |>
-  left_join(rb_injuries_wk10,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk10 <- depth_charts_22_wk10 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk10 <- rb_adv_22_wk10 |>
+  left_join(rb_depth_22_wk10, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk10[is.na(rb_adv_22_wk10)] <- 3
+
+rb_injuries_wk10 <- injuries_weekly_22_wk10 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk10 <- rb_adv_22_wk10 |>
+  left_join(rb_injuries_wk10, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 11
-rb_rush_adv_22_wk11 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 11.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk11 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 11.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk11 <- rb_rush_adv_22_wk11|>
-  left_join(rb_rec_adv_22_wk11, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk11 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 11.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk11 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 11.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk11 <- rb_rush_adv_22_wk11 |>
+  left_join(
+    rb_rec_adv_22_wk11,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 11L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk11[is.na(rb_adv_22_wk11)] <- 0
-rb_adv_22_wk11 <- rb_adv_22_wk11|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk11 <- depth_charts_22_wk11|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk11 <- rb_adv_22_wk11|>
-  left_join(rb_depth_22_wk11,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk11[is.na(rb_adv_22_wk11)] <- 3
-rb_injuries_wk11 <- injuries_weekly_22_wk11|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk11 <- rb_adv_22_wk11 |>
-  left_join(rb_injuries_wk11,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk11 <- depth_charts_22_wk11 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk11 <- rb_adv_22_wk11 |>
+  left_join(rb_depth_22_wk11, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk11[is.na(rb_adv_22_wk11)] <- 3
+
+rb_injuries_wk11 <- injuries_weekly_22_wk11 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk11 <- rb_adv_22_wk11 |>
+  left_join(rb_injuries_wk11, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 12
-rb_rush_adv_22_wk12 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 12.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk12 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 12.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk12 <- rb_rush_adv_22_wk12|>
-  left_join(rb_rec_adv_22_wk12, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk12 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 12.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk12 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 12.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk12 <- rb_rush_adv_22_wk12 |>
+  left_join(
+    rb_rec_adv_22_wk12,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 12L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk12[is.na(rb_adv_22_wk12)] <- 0
-rb_adv_22_wk12 <- rb_adv_22_wk12|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk12 <- depth_charts_22_wk12|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk12 <- rb_adv_22_wk12|>
-  left_join(rb_depth_22_wk12,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk12[is.na(rb_adv_22_wk12)] <- 3
-rb_injuries_wk12 <- injuries_weekly_22_wk12|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk12 <- rb_adv_22_wk12 |>
-  left_join(rb_injuries_wk12,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk12 <- depth_charts_22_wk12 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk12 <- rb_adv_22_wk12 |>
+  left_join(rb_depth_22_wk12, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk12[is.na(rb_adv_22_wk12)] <- 3
+
+rb_injuries_wk12 <- injuries_weekly_22_wk12 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk12 <- rb_adv_22_wk12 |>
+  left_join(rb_injuries_wk12, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 13 
-rb_rush_adv_22_wk13 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 13.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk13 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 13.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk13 <- rb_rush_adv_22_wk13|>
-  left_join(rb_rec_adv_22_wk13, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk13 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 13.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk13 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 13.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk13 <- rb_rush_adv_22_wk13 |>
+  left_join(
+    rb_rec_adv_22_wk13,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 13L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk13[is.na(rb_adv_22_wk13)] <- 0
-rb_adv_22_wk13 <- rb_adv_22_wk13|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk13 <- depth_charts_22_wk13|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk13 <- rb_adv_22_wk13|>
-  left_join(rb_depth_22_wk13,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk13[is.na(rb_adv_22_wk13)] <- 3
-rb_injuries_wk13 <- injuries_weekly_22_wk13|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk13 <- rb_adv_22_wk13 |>
-  left_join(rb_injuries_wk13,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk13 <- depth_charts_22_wk13 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk13 <- rb_adv_22_wk13 |>
+  left_join(rb_depth_22_wk13, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk13[is.na(rb_adv_22_wk13)] <- 3
+
+rb_injuries_wk13 <- injuries_weekly_22_wk13 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk13 <- rb_adv_22_wk13 |>
+  left_join(rb_injuries_wk13, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 14
-rb_rush_adv_22_wk14 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 14.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk14 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 14.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk14 <- rb_rush_adv_22_wk14|>
-  left_join(rb_rec_adv_22_wk14, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk14 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 14.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk14 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 14.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk14 <- rb_rush_adv_22_wk14 |>
+  left_join(
+    rb_rec_adv_22_wk14,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 14L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk14[is.na(rb_adv_22_wk14)] <- 0
-rb_adv_22_wk14 <- rb_adv_22_wk14|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk14 <- depth_charts_22_wk14|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk14 <- rb_adv_22_wk14|>
-  left_join(rb_depth_22_wk14,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk14[is.na(rb_adv_22_wk14)] <- 3
-rb_injuries_wk14 <- injuries_weekly_22_wk14|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk14 <- rb_adv_22_wk14 |>
-  left_join(rb_injuries_wk14,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk14 <- depth_charts_22_wk14 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk14 <- rb_adv_22_wk14 |>
+  left_join(rb_depth_22_wk14, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk14[is.na(rb_adv_22_wk14)] <- 3
+
+rb_injuries_wk14 <- injuries_weekly_22_wk14 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk14 <- rb_adv_22_wk14 |>
+  left_join(rb_injuries_wk14, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 15
-rb_rush_adv_22_wk15 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 15.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk15 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 15.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk15 <- rb_rush_adv_22_wk15|>
-  left_join(rb_rec_adv_22_wk15, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk15 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 15.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk15 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 15.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk15 <- rb_rush_adv_22_wk15 |>
+  left_join(
+    rb_rec_adv_22_wk15,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 15L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk15[is.na(rb_adv_22_wk15)] <- 0
-rb_adv_22_wk15 <- rb_adv_22_wk15|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk15 <- depth_charts_22_wk15|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk15 <- rb_adv_22_wk15|>
-  left_join(rb_depth_22_wk15,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk15[is.na(rb_adv_22_wk15)] <- 3
-rb_injuries_wk15 <- injuries_weekly_22_wk15|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk15 <- rb_adv_22_wk15 |>
-  left_join(rb_injuries_wk15,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status)) 
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk15 <- depth_charts_22_wk15 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk15 <- rb_adv_22_wk15 |>
+  left_join(rb_depth_22_wk15, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk15[is.na(rb_adv_22_wk15)] <- 3
+
+rb_injuries_wk15 <- injuries_weekly_22_wk15 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk15 <- rb_adv_22_wk15 |>
+  left_join(rb_injuries_wk15, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  ) 
 #week 16
-rb_rush_adv_22_wk16 <- read.csv("~/NFLfastR/2022 Data/rb rush wk 16.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk16 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 16.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk16 <- rb_rush_adv_22_wk16|>
-  left_join(rb_rec_adv_22_wk16, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk16 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 16.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk16 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 16.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk16 <- rb_rush_adv_22_wk16 |>
+  left_join(
+    rb_rec_adv_22_wk16,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 16L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk16[is.na(rb_adv_22_wk16)] <- 0
-rb_adv_22_wk16 <- rb_adv_22_wk16|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk16 <- depth_charts_22_wk16|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk16 <- rb_adv_22_wk16|>
-  left_join(rb_depth_22_wk16,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk16[is.na(rb_adv_22_wk16)] <- 3
-rb_injuries_wk16 <- injuries_weekly_22_wk16|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk16 <- rb_adv_22_wk16 |>
-  left_join(rb_injuries_wk16,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk16 <- depth_charts_22_wk16 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk16 <- rb_adv_22_wk16 |>
+  left_join(rb_depth_22_wk16, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk16[is.na(rb_adv_22_wk16)] <- 3
+
+rb_injuries_wk16 <- injuries_weekly_22_wk16 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk16 <- rb_adv_22_wk16 |>
+  left_join(rb_injuries_wk16, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 17
-rb_rush_adv_22_wk17 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 17.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk17 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 17.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk17 <- rb_rush_adv_22_wk17|>
-  left_join(rb_rec_adv_22_wk17, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk17 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 17.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk17 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 17.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk17 <- rb_rush_adv_22_wk17 |>
+  left_join(
+    rb_rec_adv_22_wk17,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 17L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk17[is.na(rb_adv_22_wk17)] <- 0
-rb_adv_22_wk17 <- rb_adv_22_wk17|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk17 <- depth_charts_22_wk17|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk17 <- rb_adv_22_wk17|>
-  left_join(rb_depth_22_wk17,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk17[is.na(rb_adv_22_wk17)] <- 3
-rb_injuries_wk17 <- injuries_weekly_22_wk17|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk17 <- rb_adv_22_wk17 |>
-  left_join(rb_injuries_wk17,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk17 <- depth_charts_22_wk17 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk17 <- rb_adv_22_wk17 |>
+  left_join(rb_depth_22_wk17, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk17[is.na(rb_adv_22_wk17)] <- 3
+
+rb_injuries_wk17 <- injuries_weekly_22_wk17 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk17 <- rb_adv_22_wk17 |>
+  left_join(rb_injuries_wk17, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 #week 18
-rb_rush_adv_22_wk18 <- read.csv("~/NFLfastR/2022 Data/RB rush 22 wk 18.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season, CAR = ATT, YDS_rush = YDS,RuYDS_G = RuYDS.G,TD_rush = TD,ECP_RUN_PCT = EXP.RUN..,EXP_YDS = EXP.YDS,EXP_YDS_PCT = EXP.YDS..,
-         i5_CAR = i5..,TD_RATE = TD.RATE,STUFF_PCT = STUFF..,MTF_CAR = MTF.ATT, YACO_CAR = YACO.ATT, YACO_PCT = YACO.., YBCO_CAR = YBCO.ATT, CAR_Z = ATT.1, CAR_Z_PCT = ATT..,
-         YDS_Z = YDS.1,TD_Z = TD.1,YPC_Z = YPC.1, Success_Rate_Z = Success.Rate, CAR_M = ATT.2, CAR_M_PCT = ATT...1, YDS_M = YDS.2,TD_M = TD.2, YPC_M = YPC.2,Success_Rate_M = Success.Rate.1,
-         FP_G = FP.G,XFP_G = XFP.G)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB")) 
-rb_rec_adv_22_wk18 <- read.csv("~/NFLfastR/2022 Data/RB rec 22 wk 18.csv")|>
-  rename(Player = Name, TM = Team, SEA = Season,RTE_PCT = RTE..,AY_Share = AY.Share,TGT_G = TGT.G,TGT_PCT = TGT..,Catch_Rate = CR..,RecYDS_G = RecYDS.G,TM_RecYDS_PCT = TM.YDS..,YAC_REC = YAC.REC,
-         YACO_REC = YACO.REC, TM_RecTD_PCT = TM.TD..,X1READ_PCT = X1READ..,MTF_REC = MTF.REC, X1D_RR = X1D.RR, DRP_PCT = DRP..,Catchable_TGT_Rate = CTGT.., DESIGN_PCT = DESIGN..,Contested_Catch_Rate = CC..,
-         WIDE_RTE_PCT = WIDE.RTE..,SLOT_RTE_PCT = SLOT.RTE..,INLINE_RTE_PCT = INLINE.RTE..,BACK_RTE_PCT = BACK.RTE..,FP_RR = FP.RR,FP_G = FP.G,XFP_G = XFP.G, XFP_RR = XFP.RR)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))|>
-  filter(POS %in% c("RB","FB"))
-rb_adv_22_wk18 <- rb_rush_adv_22_wk18|>
-  left_join(rb_rec_adv_22_wk18, by = c("Player","TM","POS","SEA","WK","G"), suffix = c("_rush","_rec"))|>
-  select(-FP_G_rec, -FP_rec,-XFP_rec, -XFP_G_rec)
+rb_rush_adv_22_wk18 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rush 22 wk 18.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    CAR = ATT,
+    YDS_rush = YDS,
+    RuYDS_G = RuYDS.G,
+    TD_rush = TD,
+    ECP_RUN_PCT = EXP.RUN..,
+    EXP_YDS = EXP.YDS,
+    EXP_YDS_PCT = EXP.YDS..,
+    i5_CAR = i5..,
+    TD_RATE = TD.RATE,
+    STUFF_PCT = STUFF..,
+    MTF_CAR = MTF.ATT,
+    YACO_CAR = YACO.ATT,
+    YACO_PCT = YACO..,
+    YBCO_CAR = YBCO.ATT,
+    CAR_Z = ATT.1,
+    CAR_Z_PCT = ATT..,
+    YDS_Z = YDS.1,
+    TD_Z = TD.1,
+    YPC_Z = YPC.1,
+    Success_Rate_Z = Success...1,
+    CAR_M = ATT.2,
+    CAR_M_PCT = ATT...1,
+    YDS_M = YDS.2,
+    TD_M = TD.2,
+    YPC_M = YPC.2,
+    Success_Rate_M = Success...2,
+    FP_G = FP.G,
+    XFP_G = XFP.G
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_rec_adv_22_wk18 <- read.csv(
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/2022 Data/RB Rec 22 wk 18.csv",
+  skip = 1
+) |>
+  rename(
+    Player = Name,
+    TM = Team,
+    SEA = Season,
+    RTE_PCT = RTE..,
+    AY_Share = AY.Share,
+    TGT_G = TGT.G,
+    TGT_PCT = TGT..,
+    Catch_Rate = CR..,
+    RecYDS_G = RecYDS.G,
+    TM_RecYDS_PCT = TM.YDS..,
+    YAC_REC = YAC.REC,
+    YACO_REC = YACO.REC,
+    TM_RecTD_PCT = TM.TD..,
+    X1READ_PCT = X1READ..,
+    MTF_REC = MTF.REC,
+    X1D_RR = X1D.RR,
+    DRP_PCT = DRP..,
+    Catchable_TGT_Rate = CTGT..,
+    DESIGN_PCT = DESIGN..,
+    Contested_Catch_Rate = CC..,
+    WIDE_RTE_PCT = WIDE.RTE..,
+    SLOT_RTE_PCT = SLOT.RTE..,
+    INLINE_RTE_PCT = INLINE.RTE..,
+    BACK_RTE_PCT = BACK.RTE..,
+    FP_RR = FP.RR,
+    FP_G = FP.G,
+    XFP_G = XFP.G,
+    XFP_RR = XFP.RR
+  ) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  ) |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk18 <- rb_rush_adv_22_wk18 |>
+  left_join(
+    rb_rec_adv_22_wk18,
+    by = c("Player", "TM", "POS", "SEA", "G"),
+    suffix = c("_rush", "_rec")
+  ) |>
+  mutate(WK = 18L) |>
+  select(-Rank_rush, -Rank_rec, -FP_G_rec, -FP_rec, -XFP_rec, -XFP_G_rec)
+
 rb_adv_22_wk18[is.na(rb_adv_22_wk18)] <- 0
-rb_adv_22_wk18 <- rb_adv_22_wk18|>
-  rename(CAR_PCT_OVER_15 = ECP_RUN_PCT,CAR_RUYDS_OVER_15 = EXP_YDS,RUYDS_PCT_OVER_15 = EXP_YDS_PCT)|>
-  select(Player:Success_Rate_M,RTE:BACK_RTE_PCT,FP_G_rush:XFP_G_rush,FP_RR:RecXFP)
-rb_depth_22_wk18 <- depth_charts_22_wk18|>
-  filter(POS %in% c("RB","FB"))|>
-  rename(Player = Name)|>
-  mutate(TM = ifelse(TM == "LA","LAR",TM),
-         TM = ifelse(TM == "CLV","CLE",TM),
-         TM = ifelse(TM == "HST","HOU",TM),
-         TM = ifelse(TM == "BLT",'BAL',TM),
-         TM = ifelse(TM == "ARZ","ARI",TM))
-rb_adv_22_wk18 <- rb_adv_22_wk18|>
-  left_join(rb_depth_22_wk18,by = c("Player","SEA","TM","POS"))|>
-  rename(WK = WK.x)|>
-  select(-WK.y)|>
-  select(Player:G,depth_team,CAR:RecXFP)
-rb_adv_22_wk18[is.na(rb_adv_22_wk18)] <- 3
-rb_injuries_wk18 <- injuries_weekly_22_wk18|>
-  filter(POS %in% c("RB","FB"))
+
 rb_adv_22_wk18 <- rb_adv_22_wk18 |>
-  left_join(rb_injuries_wk18,by = c("TM","POS","Player","SEA","WK"))|>
-  select(Player:depth_team,report_status,practice_primary_injury,practice_secondary_injury,practice_status,CAR:RecXFP)|>
-  mutate(report_status = ifelse(is.na(report_status), "Active",report_status),
-         practice_primary_injury = ifelse(is.na(practice_primary_injury),"Healthy",practice_primary_injury),
-         practice_secondary_injury = ifelse(is.na(practice_secondary_injury),"Healthy",practice_secondary_injury),
-         practice_status = ifelse(is.na(practice_status),"Full",practice_status))
+  rename(
+    CAR_PCT_OVER_15 = ECP_RUN_PCT,
+    CAR_RUYDS_OVER_15 = EXP_YDS,
+    RUYDS_PCT_OVER_15 = EXP_YDS_PCT
+  ) |>
+  select(Player:Success_Rate_M, RTE:BACK_RTE_PCT, FP_G_rush:XFP_G_rush, FP_RR:RecXFP)
+
+rb_depth_22_wk18 <- depth_charts_22_wk18 |>
+  filter(POS %in% c("RB", "FB")) |>
+  rename(Player = Name) |>
+  mutate(
+    TM = ifelse(TM == "LA", "LAR", TM),
+    TM = ifelse(TM == "CLV", "CLE", TM),
+    TM = ifelse(TM == "HST", "HOU", TM),
+    TM = ifelse(TM == "BLT", "BAL", TM),
+    TM = ifelse(TM == "ARZ", "ARI", TM)
+  )
+
+rb_adv_22_wk18 <- rb_adv_22_wk18 |>
+  left_join(rb_depth_22_wk18, by = c("Player", "SEA", "TM", "POS")) |>
+  select(Player:POS, SEA, WK, G, depth_team, CAR:RecXFP)
+
+rb_adv_22_wk18[is.na(rb_adv_22_wk18)] <- 3
+
+rb_injuries_wk18 <- injuries_weekly_22_wk18 |>
+  filter(POS %in% c("RB", "FB"))
+
+rb_adv_22_wk18 <- rb_adv_22_wk18 |>
+  left_join(rb_injuries_wk18, by = c("TM", "POS", "Player", "SEA", "WK")) |>
+  select(Player:depth_team, report_status, practice_primary_injury, practice_secondary_injury, practice_status, CAR:RecXFP) |>
+  mutate(
+    report_status = ifelse(is.na(report_status), "Active", report_status),
+    practice_primary_injury = ifelse(is.na(practice_primary_injury), "Healthy", practice_primary_injury),
+    practice_secondary_injury = ifelse(is.na(practice_secondary_injury), "Healthy", practice_secondary_injury),
+    practice_status = ifelse(is.na(practice_status), "Full", practice_status)
+  )
 
 #combine wks
-rb_adv_22 <- rb_adv_22_wk1|>
-  full_join(rb_adv_22_wk2)|>
-  full_join(rb_adv_22_wk3)|>
-  full_join(rb_adv_22_wk4)|>
-  full_join(rb_adv_22_wk5)|>
-  full_join(rb_adv_22_wk6)|>
-  full_join(rb_adv_22_wk7)|>
-  full_join(rb_adv_22_wk8)|>
-  full_join(rb_adv_22_wk9)|>
-  full_join(rb_adv_22_wk10)|>
-  full_join(rb_adv_22_wk11)|>
-  full_join(rb_adv_22_wk12)|>
-  full_join(rb_adv_22_wk13)|>
-  full_join(rb_adv_22_wk14)|>
-  full_join(rb_adv_22_wk15)|>
-  full_join(rb_adv_22_wk16)|>
-  full_join(rb_adv_22_wk17)|>
-  full_join(rb_adv_22_wk18)
+for (wk in 1:18) {
+  obj_name <- paste0("rb_adv_22_wk", wk)
+  
+  assign(
+    obj_name,
+    get(obj_name) |>
+      mutate(WK = wk) |>
+      distinct(Player, TM, POS, SEA, WK, G, .keep_all = TRUE)
+  )
+}
+
+rb_adv_22 <- dplyr::bind_rows(
+  rb_adv_22_wk1,
+  rb_adv_22_wk2,
+  rb_adv_22_wk3,
+  rb_adv_22_wk4,
+  rb_adv_22_wk5,
+  rb_adv_22_wk6,
+  rb_adv_22_wk7,
+  rb_adv_22_wk8,
+  rb_adv_22_wk9,
+  rb_adv_22_wk10,
+  rb_adv_22_wk11,
+  rb_adv_22_wk12,
+  rb_adv_22_wk13,
+  rb_adv_22_wk14,
+  rb_adv_22_wk15,
+  rb_adv_22_wk16,
+  rb_adv_22_wk17,
+  rb_adv_22_wk18
+)
 
 
 #combine rb schedule
-rb_sch_22 <- rb_adv_22|>
-  left_join(Team_schedule_matchups_22,by = c("TM" = "TM","G" = "G","WK" = "WK"),suffix = c("_ply","_team"))|>
-  rename(SEA = SEA_ply)|>
-  select(-dplyr::any_of("SEA_team"))|>
+Team_schedule_matchups_22_keyed <- Team_schedule_matchups_22 |>
+  distinct(TM, WK, G, .keep_all = TRUE)
+
+rb_sch_22 <- rb_adv_22 |>
+  left_join(
+    Team_schedule_matchups_22_keyed,
+    by = c("TM" = "TM", "G" = "G", "WK" = "WK"),
+    suffix = c("_ply", "_team"),
+    relationship = "many-to-one"
+  ) |>
+  rename(SEA = SEA_ply) |>
+  select(-dplyr::any_of("SEA_team")) |>
   mutate(
     fantasyPts = dplyr::coalesce(
       FP_G_rush,
@@ -23389,7 +25164,7 @@ rb_sch_22 <- rb_adv_22|>
         6 * dplyr::coalesce(TD_rush, 0) +
         6 * dplyr::coalesce(TD, 0)
     )
-  )|>
+  ) |>
   relocate(fantasyPts, .before = depth_team)
 rb_sch_22$depth_team <- as.numeric(rb_sch_22$depth_team)
 rb_sch_22 <- rb_sch_22|> 
@@ -23737,7 +25512,7 @@ rb_sch_22 <- rb_sch_22|>
                                                                                         ifelse(CAR_PCT_Vol_Role == "Lesser Volume" & RB_TGT_PCT_Role == "Limited Receiving Back" | CAR_PCT_Vol_Role == "Lesser Volume" & RB_TGT_PCT_Role == "Non Receiver Back" | CAR_PCT_Vol_Role == "Rush Anemic" & RB_TGT_PCT_Role == "Limited Receiving Back" | CAR_PCT_Vol_Role == "Rush Anemic" & RB_TGT_PCT_Role == "Non Receiver Back", "Backup",NA))))))))), levels = c("Elite Bell Cow","Bell Cow","Well Rounded","Elite Workhorse","Workhorse","Receiving Specialist","Balanced","Committee","Backup")))|>
   select(Player:RB_RATE_Role,RB_Style_Role,CAR:avg_total_wind_def)|>
   select(Player:practice_status,RB_Style_Role,RB_Depth_Role:RB_RATE_Role,CAR:avg_total_wind_def)|>
-  mutate(Opp = CAR + TGT_ply,
+  mutate(Opp = CAR + TGT,
          Scrm_YDs = YDS_rush + YDS,
          Tot_TDs = TD_rush + TD)|>
   select(Player:RB_RATE_Role,Opp,Scrm_YDs,Tot_TDs,CAR:avg_total_wind_def)
