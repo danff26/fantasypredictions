@@ -219,11 +219,11 @@ sum_existing_numeric <- function(df, candidate_groups) {
   if (length(candidate_groups) == 0) {
     return(rep(0, nrow(df)))
   }
-  
+
   parts <- lapply(candidate_groups, function(candidates) {
     pick_first_existing_numeric(df, candidates)
   })
-  
+
   out <- Reduce(`+`, parts)
   out[!is.finite(out)] <- 0
   out
@@ -281,7 +281,7 @@ compute_k_fantasy_points_from_df <- function(df) {
     )
   )
   xp_made <- pick_first_existing_numeric(df, c("epsMade", "epsMade_ply", "xpm", "XPM", "XP_Made"))
-  
+
   points <- made_0_39 * 3 + made_40_49 * 4 + made_50_plus * 5 + xp_made
   points[!is.finite(points)] <- NA_real_
   points
@@ -332,6 +332,7 @@ normalize_team_abbr <- function(team_vec) {
   team_vec <- as.character(team_vec)
   dplyr::case_when(
     team_vec == "LA" ~ "LAR",
+    team_vec == "JAC" ~ "JAX",
     team_vec == "CLV" ~ "CLE",
     team_vec == "HST" ~ "HOU",
     team_vec == "BLT" ~ "BAL",
@@ -406,7 +407,7 @@ load_all_positions_hybrid <- function(file_path = model_paths$all_positions_hybr
 
 augment_model_spine <- function(df) {
   load_model_core_packages()
-  
+
   kicker_fantasy_points <- compute_k_fantasy_points_from_df(df)
   dst_fantasy_points <- compute_dst_fantasy_points_from_df(df)
   
@@ -458,11 +459,11 @@ build_team_week_context_reference <- function(
     positions = c("QB", "RB", "WR", "TE")
 ) {
   load_model_core_packages()
-  
+
   context_raw <- load_all_positions_hybrid(file_path) |>
     augment_model_spine() |>
     dplyr::filter(.data$position %in% .env$positions)
-  
+
   if (nrow(context_raw) == 0) {
     return(data.frame(
       season = integer(),
@@ -485,7 +486,7 @@ build_team_week_context_reference <- function(
       stringsAsFactors = FALSE
     ))
   }
-  
+
   context_raw |>
     dplyr::transmute(
       season = .data$season,
@@ -615,13 +616,13 @@ qb_fantasy_points_formula <- function(pass_yards, pass_td, interceptions, rush_y
   interceptions <- safe_numeric(interceptions)
   rush_yards <- safe_numeric(rush_yards)
   rush_td <- safe_numeric(rush_td)
-  
+
   pass_yards[!is.finite(pass_yards)] <- 0
   pass_td[!is.finite(pass_td)] <- 0
   interceptions[!is.finite(interceptions)] <- 0
   rush_yards[!is.finite(rush_yards)] <- 0
   rush_td[!is.finite(rush_td)] <- 0
-  
+
   pass_yards / 25 +
     pass_td * 4 -
     interceptions * 2 +
@@ -743,7 +744,7 @@ build_qb_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
   duplicate_keys <- qb_weekly |>
     dplyr::count(.data$season, .data$week, .data$player_key, name = "dup_n") |>
     dplyr::filter(.data$dup_n > 1)
-  
+
   if (nrow(duplicate_keys) > 0) {
     qb_conflict_cols <- c(
       "team", "pass_attempts", "completions", "pass_yards", "pass_td", "interceptions",
@@ -761,7 +762,7 @@ build_qb_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
         .groups = "drop"
       ) |>
       dplyr::filter(dplyr::if_any(dplyr::starts_with("distinct_"), ~ .x > 1L))
-    
+
     if (nrow(conflicting_keys) > 0) {
       stop(
         paste0(
@@ -772,7 +773,7 @@ build_qb_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
       )
     }
   }
-  
+
   qb_quality_cols <- c(
     "pass_attempts", "completions", "pass_yards", "pass_td", "interceptions",
     "rush_attempts", "rush_yards", "rush_td", "fantasy_points_calc",
@@ -835,10 +836,10 @@ build_qb_team_week_opportunity_table <- function(qb_weekly = build_qb_clean_week
 }
 
 build_qb_player_share_table <- function(
-    qb_weekly = build_qb_clean_weekly_master(),
-    team_week = build_qb_team_week_opportunity_table(qb_weekly),
-    write_output = FALSE,
-    output_dir = model_paths$foundation_output_dir
+  qb_weekly = build_qb_clean_weekly_master(),
+  team_week = build_qb_team_week_opportunity_table(qb_weekly),
+  write_output = FALSE,
+  output_dir = model_paths$foundation_output_dir
 ) {
   load_model_core_packages()
   
@@ -869,9 +870,9 @@ build_qb_player_share_table <- function(
 }
 
 build_qb_weekly_role_usage_table <- function(
-    qb_share = build_qb_player_share_table(),
-    write_output = FALSE,
-    output_dir = model_paths$foundation_output_dir
+  qb_share = build_qb_player_share_table(),
+  write_output = FALSE,
+  output_dir = model_paths$foundation_output_dir
 ) {
   load_model_core_packages()
   
@@ -923,10 +924,10 @@ build_qb_weekly_role_usage_table <- function(
 }
 
 build_qb_player_season_combined_table <- function(
-    qb_weekly = build_qb_clean_weekly_master(),
-    qb_share = build_qb_player_share_table(qb_weekly = qb_weekly),
-    write_output = FALSE,
-    output_dir = model_paths$foundation_output_dir
+  qb_weekly = build_qb_clean_weekly_master(),
+  qb_share = build_qb_player_share_table(qb_weekly = qb_weekly),
+  write_output = FALSE,
+  output_dir = model_paths$foundation_output_dir
 ) {
   load_model_core_packages()
   
@@ -1234,17 +1235,17 @@ qb_wow_percent_rank_0to100 <- function(x, higher_is_better = TRUE) {
   x_num <- suppressWarnings(as.numeric(x))
   out <- rep(NA_real_, length(x_num))
   keep <- is.finite(x_num)
-  
+
   if (sum(keep) == 1L) {
     out[keep] <- 100
     return(out)
   }
-  
+
   if (sum(keep) > 1L) {
     vals <- if (higher_is_better) x_num[keep] else -x_num[keep]
     out[keep] <- dplyr::percent_rank(vals) * 100
   }
-  
+
   out
 }
 
@@ -1253,14 +1254,14 @@ qb_wow_row_mean <- function(...) {
   if (length(args) == 0) {
     return(numeric())
   }
-  
+
   max_len <- max(vapply(args, length, integer(1)))
   cols <- lapply(args, function(x) {
     x_num <- suppressWarnings(as.numeric(x))
     length(x_num) <- max_len
     x_num
   })
-  
+
   mat <- do.call(cbind, cols)
   out <- rowMeans(mat, na.rm = TRUE)
   out[!is.finite(out)] <- NA_real_
@@ -1269,7 +1270,7 @@ qb_wow_row_mean <- function(...) {
 
 qb_draft_day_score_0to100 <- function(draft_day_vec) {
   draft_chr <- trimws(tolower(as.character(draft_day_vec)))
-  
+
   dplyr::case_when(
     draft_chr %in% c("day 1", "round 1", "round 1-2") ~ 100,
     draft_chr %in% c("day 2", "round 2", "round 2-3") ~ 82,
@@ -1282,7 +1283,7 @@ qb_draft_day_score_0to100 <- function(draft_day_vec) {
 
 build_qb_prior_season_week1_summary <- function(qb_wow_state_overlay) {
   load_model_core_packages()
-  
+
   season_summary <- qb_wow_state_overlay |>
     dplyr::mutate(
       player_key = as.character(.data$player_key),
@@ -1304,7 +1305,7 @@ build_qb_prior_season_week1_summary <- function(qb_wow_state_overlay) {
       season_rush_td_pg = ifelse(season_games > 0, mean(.data$rush_td, na.rm = TRUE), NA_real_),
       .groups = "drop"
     )
-  
+
   prior_summary <- season_summary |>
     dplyr::transmute(
       player_key = .data$player_key,
@@ -1317,17 +1318,17 @@ build_qb_prior_season_week1_summary <- function(qb_wow_state_overlay) {
       prior_season_rush_yards_pg = .data$season_rush_yards_pg,
       prior_season_rush_td_pg = .data$season_rush_td_pg
     )
-  
+
   target_rows <- season_summary |>
     dplyr::distinct(.data$player_key, .data$season)
-  
+
   career_summary <- lapply(seq_len(nrow(target_rows)), function(i) {
     player_key_i <- target_rows$player_key[[i]]
     season_i <- target_rows$season[[i]]
-    
+
     hist <- season_summary |>
       dplyr::filter(.data$player_key == player_key_i, .data$season < season_i, .data$season_games > 0)
-    
+
     if (nrow(hist) == 0) {
       return(data.frame(
         player_key = player_key_i,
@@ -1345,11 +1346,11 @@ build_qb_prior_season_week1_summary <- function(qb_wow_state_overlay) {
         stringsAsFactors = FALSE
       ))
     }
-    
+
     total_games <- sum(hist$season_games, na.rm = TRUE)
     total_fp <- sum(hist$season_total_fp, na.rm = TRUE)
     last_active <- max(hist$season, na.rm = TRUE)
-    
+
     data.frame(
       player_key = player_key_i,
       season = season_i,
@@ -1367,7 +1368,7 @@ build_qb_prior_season_week1_summary <- function(qb_wow_state_overlay) {
     )
   }) |>
     dplyr::bind_rows()
-  
+
   target_rows |>
     dplyr::left_join(prior_summary, by = c("player_key", "season")) |>
     dplyr::left_join(career_summary, by = c("player_key", "season"))
@@ -1375,12 +1376,12 @@ build_qb_prior_season_week1_summary <- function(qb_wow_state_overlay) {
 
 read_qb_wow_state_overlay_output <- function() {
   load_model_core_packages()
-  
+
   state_overlay_path <- file.path(
     model_paths$wow_output_dir,
     "qb_wow_state_overlay_2023_2025.csv"
   )
-  
+
   if (!file.exists(state_overlay_path)) {
     stop(
       paste0(
@@ -1391,9 +1392,9 @@ read_qb_wow_state_overlay_output <- function() {
       call. = FALSE
     )
   }
-  
+
   state_overlay <- utils::read.csv(state_overlay_path, stringsAsFactors = FALSE)
-  
+
   # The overlay is persisted separately from the hybrid source. Restrict it to
   # season/week pairs currently available so audits and new-season updates do
   # not accidentally reuse future rows from an older saved overlay.
@@ -1401,18 +1402,18 @@ read_qb_wow_state_overlay_output <- function() {
     load_all_positions_hybrid(model_paths$all_positions_hybrid_csv),
     error = function(e) NULL
   )
-  
+
   if (is.null(available_source) || !all(c("season", "week") %in% names(state_overlay))) {
     return(state_overlay)
   }
-  
+
   available_season_col <- if ("SEA" %in% names(available_source)) "SEA" else "season"
   available_week_col <- if ("WK" %in% names(available_source)) "WK" else "week"
-  
+
   if (!all(c(available_season_col, available_week_col) %in% names(available_source))) {
     return(state_overlay)
   }
-  
+
   available_pairs <- available_source |>
     dplyr::transmute(
       season = suppressWarnings(as.integer(.data[[available_season_col]])),
@@ -1420,7 +1421,7 @@ read_qb_wow_state_overlay_output <- function() {
     ) |>
     dplyr::filter(is.finite(.data$season), is.finite(.data$week)) |>
     dplyr::distinct()
-  
+
   state_overlay |>
     dplyr::mutate(
       season = suppressWarnings(as.integer(.data$season)),
@@ -1431,13 +1432,13 @@ read_qb_wow_state_overlay_output <- function() {
 
 build_qb_wow_production_board_fixed <- function(qb_wow_state_overlay = NULL, write_output = TRUE) {
   load_model_core_packages()
-  
+
   if (is.null(qb_wow_state_overlay)) {
     qb_wow_state_overlay <- read_qb_wow_state_overlay_output()
   }
-  
+
   qb_prior_season_summary <- build_qb_prior_season_week1_summary(qb_wow_state_overlay)
-  
+
   out <- qb_wow_state_overlay |>
     dplyr::left_join(qb_prior_season_summary, by = c("player_key", "season")) |>
     dplyr::mutate(
@@ -1658,7 +1659,7 @@ build_qb_wow_production_board_fixed <- function(qb_wow_state_overlay = NULL, wri
       target_week_fp
     ) |>
     dplyr::arrange(.data$season, .data$week, .data$qb_wow_rank)
-  
+
   if (write_output) {
     dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -1668,13 +1669,13 @@ build_qb_wow_production_board_fixed <- function(qb_wow_state_overlay = NULL, wri
       na = ""
     )
   }
-  
+
   out
 }
 
 build_qb_wow_board_summary_fixed <- function(qb_wow_board, write_output = TRUE) {
   load_model_core_packages()
-  
+
   week_metrics_raw <- qb_wow_board |>
     dplyr::group_by(.data$season, .data$week) |>
     dplyr::summarise(
@@ -1689,14 +1690,14 @@ build_qb_wow_board_summary_fixed <- function(qb_wow_board, write_output = TRUE) 
       },
       .groups = "drop"
     )
-  
+
   full_week_template <- expand.grid(
     season = sort(unique(suppressWarnings(as.integer(qb_wow_board$season)))),
     week = 1:18,
     KEEP.OUT.ATTRS = FALSE,
     stringsAsFactors = FALSE
   )
-  
+
   week_metrics <- full_week_template |>
     dplyr::left_join(week_metrics_raw, by = c("season", "week")) |>
     dplyr::mutate(
@@ -1706,7 +1707,7 @@ build_qb_wow_board_summary_fixed <- function(qb_wow_board, write_output = TRUE) 
       is_scorable = as.integer(.data$n > 1 & is.finite(.data$spearman))
     ) |>
     dplyr::arrange(.data$season, .data$week)
-  
+
   summary_out <- week_metrics |>
     dplyr::group_by(.data$season) |>
     dplyr::summarise(
@@ -1739,7 +1740,7 @@ build_qb_wow_board_summary_fixed <- function(qb_wow_board, write_output = TRUE) 
       .groups = "drop"
     ) |>
     dplyr::arrange(.data$season)
-  
+
   if (write_output) {
     utils::write.csv(
       week_metrics,
@@ -1754,7 +1755,7 @@ build_qb_wow_board_summary_fixed <- function(qb_wow_board, write_output = TRUE) 
       na = ""
     )
   }
-  
+
   list(
     week_metrics = week_metrics,
     summary = summary_out
@@ -1763,7 +1764,7 @@ build_qb_wow_board_summary_fixed <- function(qb_wow_board, write_output = TRUE) 
 
 build_qb_wow_final_export_fixed <- function(qb_wow_board, write_output = TRUE) {
   load_model_core_packages()
-  
+
   out <- qb_wow_board |>
     dplyr::transmute(
       season = .data$season,
@@ -1788,7 +1789,7 @@ build_qb_wow_final_export_fixed <- function(qb_wow_board, write_output = TRUE) {
       actual_week_fp = .data$target_week_fp
     ) |>
     dplyr::arrange(.data$season, .data$week, .data$rank)
-  
+
   if (write_output) {
     utils::write.csv(
       out,
@@ -1797,17 +1798,17 @@ build_qb_wow_final_export_fixed <- function(qb_wow_board, write_output = TRUE) {
       na = ""
     )
   }
-  
+
   out
 }
 
 run_qb_wow_board_rebuild <- function(write_output = TRUE) {
   load_model_core_packages()
-  
+
   qb_wow_board <- build_qb_wow_production_board_fixed(write_output = write_output)
   qb_wow_board_summary <- build_qb_wow_board_summary_fixed(qb_wow_board, write_output = write_output)
   qb_wow_final_export <- build_qb_wow_final_export_fixed(qb_wow_board, write_output = write_output)
-  
+
   list(
     board = qb_wow_board,
     board_summary = qb_wow_board_summary,
@@ -1822,12 +1823,12 @@ rb_half_ppr_points_formula <- function(rush_yards, receptions, receiving_yards, 
   receptions <- safe_numeric(receptions)
   receiving_yards <- safe_numeric(receiving_yards)
   total_td <- safe_numeric(total_td)
-  
+
   rush_yards[!is.finite(rush_yards)] <- 0
   receptions[!is.finite(receptions)] <- 0
   receiving_yards[!is.finite(receiving_yards)] <- 0
   total_td[!is.finite(total_td)] <- 0
-  
+
   rush_yards / 10 +
     receptions * 0.5 +
     receiving_yards / 10 +
@@ -1836,11 +1837,11 @@ rb_half_ppr_points_formula <- function(rush_yards, receptions, receiving_yards, 
 
 build_rb_clean_weekly_master <- function(write_output = FALSE, output_dir = model_paths$foundation_output_dir) {
   load_model_core_packages()
-  
+
   rb_raw <- load_all_positions_hybrid() |>
     augment_model_spine() |>
     dplyr::filter(.data$POS %in% c("RB", "FB"))
-  
+
   rb_weekly <- rb_raw |>
     dplyr::transmute(
       season = .data$season,
@@ -1900,11 +1901,11 @@ build_rb_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
     ) |>
     dplyr::select(-dplyr::any_of(c("targets_primary", "targets_fallback"))) |>
     dplyr::arrange(.data$season, .data$week, .data$team, .data$player)
-  
+
   duplicate_keys <- rb_weekly |>
     dplyr::count(.data$season, .data$week, .data$player_key, name = "dup_n") |>
     dplyr::filter(.data$dup_n > 1)
-  
+
   if (nrow(duplicate_keys) > 0) {
     rb_conflict_cols <- c(
       "team", "position", "rush_attempts", "rush_yards", "rush_td", "targets",
@@ -1922,7 +1923,7 @@ build_rb_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
         .groups = "drop"
       ) |>
       dplyr::filter(dplyr::if_any(dplyr::starts_with("distinct_"), ~ .x > 1L))
-    
+
     if (nrow(conflicting_keys) > 0) {
       stop(
         paste0(
@@ -1933,7 +1934,7 @@ build_rb_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
       )
     }
   }
-  
+
   rb_quality_cols <- c(
     "rush_attempts", "rush_yards", "rush_td", "targets", "receptions",
     "receiving_yards", "receiving_td", "total_td", "half_ppr_points",
@@ -1948,7 +1949,7 @@ build_rb_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
     ) |>
     dplyr::distinct(.data$season, .data$week, .data$player_key, .keep_all = TRUE) |>
     dplyr::select(-dplyr::all_of(".rb_row_completeness"))
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -1958,13 +1959,13 @@ build_rb_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
       na = ""
     )
   }
-  
+
   rb_weekly
 }
 
 build_rb_team_week_opportunity_table <- function(rb_weekly = build_rb_clean_weekly_master(), write_output = FALSE, output_dir = model_paths$foundation_output_dir) {
   load_model_core_packages()
-  
+
   out <- rb_weekly |>
     dplyr::group_by(.data$season, .data$week, .data$team) |>
     dplyr::summarise(
@@ -1975,7 +1976,7 @@ build_rb_team_week_opportunity_table <- function(rb_weekly = build_rb_clean_week
       team_rbfb_half_ppr = sum(.data$half_ppr_points, na.rm = TRUE),
       .groups = "drop"
     )
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -1985,7 +1986,7 @@ build_rb_team_week_opportunity_table <- function(rb_weekly = build_rb_clean_week
       na = ""
     )
   }
-  
+
   out
 }
 
@@ -1996,7 +1997,7 @@ build_rb_player_share_table <- function(
     output_dir = model_paths$foundation_output_dir
 ) {
   load_model_core_packages()
-  
+
   out <- rb_weekly |>
     dplyr::left_join(team_week, by = c("season", "week", "team")) |>
     dplyr::mutate(
@@ -2007,7 +2008,7 @@ build_rb_player_share_table <- function(
       team_fantasy_share = safe_div(.data$half_ppr_points, .data$team_rbfb_half_ppr),
       starter_flag = dplyr::if_else(!is.na(.data$depth_team) & .data$depth_team <= 1, 1L, 0L)
     )
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -2017,15 +2018,15 @@ build_rb_player_share_table <- function(
       na = ""
     )
   }
-  
+
   out
 }
 
 build_rb_weekly_feature_base <- function(write_output = FALSE, output_dir = model_paths$wow_output_dir) {
   load_model_core_packages()
-  
+
   rb_share <- build_rb_player_share_table(write_output = FALSE)
-  
+
   out <- rb_share |>
     dplyr::filter(.data$rb_model_eligible) |>
     dplyr::arrange(.data$player_key, .data$season, .data$week) |>
@@ -2085,7 +2086,7 @@ build_rb_weekly_feature_base <- function(write_output = FALSE, output_dir = mode
       target_week_fp = .data$next_week_fantasy_points
     ) |>
     dplyr::ungroup()
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -2095,15 +2096,15 @@ build_rb_weekly_feature_base <- function(write_output = FALSE, output_dir = mode
       na = ""
     )
   }
-  
+
   out
 }
 
 build_rb_wow_inputs <- function(write_output = FALSE) {
   load_model_core_packages()
-  
+
   rb_weekly_feature_base <- build_rb_weekly_feature_base(write_output = write_output)
-  
+
   out <- list(
     position = "RB",
     mode = "week_over_week",
@@ -2117,21 +2118,21 @@ build_rb_wow_inputs <- function(write_output = FALSE) {
       "Build next-week RB projection, range, and weekly review-flag logic from the handoff."
     )
   )
-  
+
   if (write_output) {
     out$output_paths <- c(
       rb_weekly_base = write_wow_weekly_base("RB"),
       rb_weekly_feature_base = file.path(model_paths$wow_output_dir, "rb_weekly_feature_base_2021_2025_regular.csv")
     )
   }
-  
+
   out
 }
 
 make_rb_wow_output_manifest <- function(rb_wow_result) {
   output_paths <- unname(rb_wow_result$output_paths %||% character())
   output_labels <- names(rb_wow_result$output_paths %||% character())
-  
+
   data.frame(
     output_name = output_labels,
     output_path = output_paths,
@@ -2142,12 +2143,12 @@ make_rb_wow_output_manifest <- function(rb_wow_result) {
 
 run_rb_wow_pipeline <- function(write_output = TRUE) {
   load_model_core_packages()
-  
+
   dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
-  
+
   rb_wow_result <- build_rb_wow_inputs(write_output = write_output)
   rb_wow_board_rebuild <- run_rb_wow_board_rebuild(write_output = write_output)
-  
+
   output_paths <- c(
     rb_wow_result$output_paths %||% character(),
     rb_wow_feature_overlay = file.path(model_paths$wow_output_dir, "rb_wow_feature_overlay_2021_2025.csv"),
@@ -2155,10 +2156,10 @@ run_rb_wow_pipeline <- function(write_output = TRUE) {
     rb_wow_board_summary = file.path(model_paths$wow_output_dir, "rb_wow_board_summary_2021_2025.csv"),
     rb_wow_final_export = file.path(model_paths$wow_output_dir, "rb_wow_final_export_2021_2025.csv")
   )
-  
+
   rb_wow_result$output_paths <- output_paths
   output_manifest <- make_rb_wow_output_manifest(rb_wow_result)
-  
+
   list(
     result = rb_wow_result,
     board = rb_wow_board_rebuild$board,
@@ -2181,7 +2182,7 @@ rb_wow_centered_rank <- function(x, higher_is_better = TRUE) {
 
 build_rb_prior_season_week1_summary <- function(rb_wow_feature_base) {
   load_model_core_packages()
-  
+
   season_summary <- rb_wow_feature_base |>
     dplyr::mutate(
       player_key = as.character(.data$player_key),
@@ -2205,7 +2206,7 @@ build_rb_prior_season_week1_summary <- function(rb_wow_feature_base) {
       season_total_td_pg = ifelse(season_games > 0, mean(.data$total_td, na.rm = TRUE), NA_real_),
       .groups = "drop"
     )
-  
+
   prior_summary <- season_summary |>
     dplyr::transmute(
       player_key = .data$player_key,
@@ -2219,17 +2220,17 @@ build_rb_prior_season_week1_summary <- function(rb_wow_feature_base) {
       prior_season_scrimmage_yards_pg = .data$season_scrimmage_yards_pg,
       prior_season_total_td_pg = .data$season_total_td_pg
     )
-  
+
   target_rows <- season_summary |>
     dplyr::distinct(.data$player_key, .data$season)
-  
+
   career_summary <- lapply(seq_len(nrow(target_rows)), function(i) {
     player_key_i <- target_rows$player_key[[i]]
     season_i <- target_rows$season[[i]]
-    
+
     hist <- season_summary |>
       dplyr::filter(.data$player_key == player_key_i, .data$season < season_i, .data$season_games > 0)
-    
+
     if (nrow(hist) == 0) {
       return(data.frame(
         player_key = player_key_i,
@@ -2248,11 +2249,11 @@ build_rb_prior_season_week1_summary <- function(rb_wow_feature_base) {
         stringsAsFactors = FALSE
       ))
     }
-    
+
     total_games <- sum(hist$season_games, na.rm = TRUE)
     total_fp <- sum(hist$season_total_fp, na.rm = TRUE)
     last_active <- max(hist$season, na.rm = TRUE)
-    
+
     data.frame(
       player_key = player_key_i,
       season = season_i,
@@ -2271,7 +2272,7 @@ build_rb_prior_season_week1_summary <- function(rb_wow_feature_base) {
     )
   }) |>
     dplyr::bind_rows()
-  
+
   target_rows |>
     dplyr::left_join(prior_summary, by = c("player_key", "season")) |>
     dplyr::left_join(career_summary, by = c("player_key", "season"))
@@ -2279,7 +2280,7 @@ build_rb_prior_season_week1_summary <- function(rb_wow_feature_base) {
 
 build_rb_wow_defense_context <- function(rb_wow_feature_base) {
   load_model_core_packages()
-  
+
   rb_wow_feature_base |>
     dplyr::group_by(season, week, defense_team = opponent) |>
     dplyr::summarise(
@@ -2303,14 +2304,14 @@ build_rb_wow_defense_context <- function(rb_wow_feature_base) {
 
 build_rb_wow_feature_overlay_table <- function(rb_wow_feature_base = NULL, write_output = TRUE, output_dir = model_paths$wow_output_dir) {
   load_model_core_packages()
-  
+
   if (is.null(rb_wow_feature_base)) {
     rb_wow_feature_base <- build_rb_weekly_feature_base(write_output = FALSE)
   }
-  
+
   rb_prior_season_summary <- build_rb_prior_season_week1_summary(rb_wow_feature_base)
   rb_defense_context <- build_rb_wow_defense_context(rb_wow_feature_base)
-  
+
   out <- rb_wow_feature_base |>
     dplyr::left_join(rb_prior_season_summary, by = c("player_key", "season")) |>
     dplyr::left_join(rb_defense_context, by = c("season", "week", "opponent" = "defense_team")) |>
@@ -2437,11 +2438,11 @@ build_rb_wow_feature_overlay_table <- function(rb_wow_feature_base = NULL, write
       ),
       preseason_anchor_score = dplyr::if_else(.data$is_true_rookie, pmin(.data$preseason_anchor_score_raw, 78), .data$preseason_anchor_score_raw),
       rb_in_season_omfg_score = pmin(100, pmax(0,
-                                               dplyr::if_else(
-                                                 .data$week == 1L,
-                                                 .data$preseason_anchor_score,
-                                                 .data$preseason_weight * .data$preseason_anchor_score + (1 - .data$preseason_weight) * .data$inseason_omfg_component
-                                               )
+        dplyr::if_else(
+          .data$week == 1L,
+          .data$preseason_anchor_score,
+          .data$preseason_weight * .data$preseason_anchor_score + (1 - .data$preseason_weight) * .data$inseason_omfg_component
+        )
       )),
       omfg_delta_from_preseason = .data$rb_in_season_omfg_score - .data$preseason_anchor_score,
       omfg_trend_3w = .data$rb_in_season_omfg_score - dplyr::lag(.data$rb_in_season_omfg_score, 3),
@@ -2454,15 +2455,15 @@ build_rb_wow_feature_overlay_table <- function(rb_wow_feature_base = NULL, write
         -0.30 * dplyr::coalesce(.data$rolling5_opportunities_sd, 0) +
         -0.25 * dplyr::coalesce(.data$rolling5_routes_sd, 0) +
         -0.20 * dplyr::coalesce(.data$rolling5_fantasy_points_sd, 0) +
-        0.25 * dplyr::coalesce(.data$games_with_8plus_opp_recent_rate, 0),
+         0.25 * dplyr::coalesce(.data$games_with_8plus_opp_recent_rate, 0),
       role_trend_score = qb_wow_percent_rank_0to100(.data$role_trend_score_raw),
       role_stability_score = qb_wow_percent_rank_0to100(.data$role_stability_score_raw),
       ros_role_modifier = pmin(1.25, pmax(0.75,
-                                          1 +
-                                            rb_wow_centered_rank(.data$omfg_delta_from_preseason) * 0.06 +
-                                            rb_wow_centered_rank(.data$omfg_trend_3w) * 0.04 +
-                                            rb_wow_centered_rank(.data$role_trend_score) * 0.04 +
-                                            rb_wow_centered_rank(.data$role_stability_score) * 0.03
+        1 +
+          rb_wow_centered_rank(.data$omfg_delta_from_preseason) * 0.06 +
+          rb_wow_centered_rank(.data$omfg_trend_3w) * 0.04 +
+          rb_wow_centered_rank(.data$role_trend_score) * 0.04 +
+          rb_wow_centered_rank(.data$role_stability_score) * 0.03
       )),
       base_projection_seed = dplyr::coalesce(
         0.45 * .data$season_to_date_fantasy_points_per_game +
@@ -2476,9 +2477,9 @@ build_rb_wow_feature_overlay_table <- function(rb_wow_feature_base = NULL, write
       weekly_projected_fp_before_matchup = .data$base_projection_seed *
         .data$ros_role_modifier *
         pmin(1.18, pmax(0.88,
-                        1 +
-                          rb_wow_centered_rank(.data$current_opportunity_score) * 0.10 +
-                          rb_wow_centered_rank(.data$current_receiving_score) * 0.05
+          1 +
+            rb_wow_centered_rank(.data$current_opportunity_score) * 0.10 +
+            rb_wow_centered_rank(.data$current_receiving_score) * 0.05
         )),
       rb_matchup_ease_score = qb_wow_row_mean(
         qb_wow_percent_rank_0to100(.data$trailing5_rb_fp_allowed),
@@ -2532,7 +2533,7 @@ build_rb_wow_feature_overlay_table <- function(rb_wow_feature_base = NULL, write
     ) |>
     dplyr::ungroup() |>
     dplyr::arrange(.data$season, .data$week, .data$rb_wow_rank)
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -2542,13 +2543,13 @@ build_rb_wow_feature_overlay_table <- function(rb_wow_feature_base = NULL, write
       na = ""
     )
   }
-  
+
   out
 }
 
 build_rb_wow_board_summary <- function(rb_wow_board, write_output = TRUE) {
   load_model_core_packages()
-  
+
   week_metrics <- rb_wow_board |>
     dplyr::group_by(.data$season, .data$week) |>
     dplyr::summarise(
@@ -2567,7 +2568,7 @@ build_rb_wow_board_summary <- function(rb_wow_board, write_output = TRUE) {
       predicts_week = .data$week + 1L,
       is_scorable = as.integer(.data$n > 1 & is.finite(.data$spearman))
     )
-  
+
   summary_out <- week_metrics |>
     dplyr::group_by(.data$season) |>
     dplyr::summarise(
@@ -2600,7 +2601,7 @@ build_rb_wow_board_summary <- function(rb_wow_board, write_output = TRUE) {
       .groups = "drop"
     ) |>
     dplyr::arrange(.data$season)
-  
+
   if (write_output) {
     utils::write.csv(
       week_metrics,
@@ -2615,7 +2616,7 @@ build_rb_wow_board_summary <- function(rb_wow_board, write_output = TRUE) {
       na = ""
     )
   }
-  
+
   list(
     week_metrics = week_metrics,
     summary = summary_out
@@ -2624,7 +2625,7 @@ build_rb_wow_board_summary <- function(rb_wow_board, write_output = TRUE) {
 
 build_rb_wow_final_export <- function(rb_wow_board, write_output = TRUE) {
   load_model_core_packages()
-  
+
   out <- rb_wow_board |>
     dplyr::transmute(
       season = .data$season,
@@ -2651,7 +2652,7 @@ build_rb_wow_final_export <- function(rb_wow_board, write_output = TRUE) {
       actual_next_week_fp = .data$target_week_fp
     ) |>
     dplyr::arrange(.data$season, .data$week, .data$rank)
-  
+
   if (write_output) {
     utils::write.csv(
       out,
@@ -2660,17 +2661,17 @@ build_rb_wow_final_export <- function(rb_wow_board, write_output = TRUE) {
       na = ""
     )
   }
-  
+
   out
 }
 
 run_rb_wow_board_rebuild <- function(write_output = TRUE) {
   load_model_core_packages()
-  
+
   rb_wow_board <- build_rb_wow_feature_overlay_table(write_output = write_output)
   rb_wow_board_summary <- build_rb_wow_board_summary(rb_wow_board, write_output = write_output)
   rb_wow_final_export <- build_rb_wow_final_export(rb_wow_board, write_output = write_output)
-  
+
   list(
     board = rb_wow_board,
     board_summary = rb_wow_board_summary,
@@ -2685,12 +2686,12 @@ wr_half_ppr_points_formula <- function(receiving_yards, receptions, total_td, ru
   receptions <- safe_numeric(receptions)
   total_td <- safe_numeric(total_td)
   rush_yards <- safe_numeric(rush_yards)
-  
+
   receiving_yards[!is.finite(receiving_yards)] <- 0
   receptions[!is.finite(receptions)] <- 0
   total_td[!is.finite(total_td)] <- 0
   rush_yards[!is.finite(rush_yards)] <- 0
-  
+
   receiving_yards / 10 +
     receptions * 0.5 +
     total_td * 6 +
@@ -2710,9 +2711,9 @@ wr_wow_centered_rank <- function(x, higher_is_better = TRUE) {
 
 build_wr_clean_weekly_master <- function(write_output = FALSE, output_dir = model_paths$foundation_output_dir) {
   load_model_core_packages()
-  
+
   wr_raw <- load_position_hybrid("WR")
-  
+
   wr_weekly <- wr_raw |>
     dplyr::transmute(
       season = .data$season,
@@ -2832,11 +2833,11 @@ build_wr_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
       ))
     ) |>
     dplyr::arrange(.data$season, .data$week, .data$team, .data$player)
-  
+
   duplicate_keys <- wr_weekly |>
     dplyr::count(.data$season, .data$week, .data$player_key, name = "dup_n") |>
     dplyr::filter(.data$dup_n > 1)
-  
+
   if (nrow(duplicate_keys) > 0) {
     conflict_columns <- c(
       "team", "opponent", "position", "routes", "targets", "receptions",
@@ -2856,7 +2857,7 @@ build_wr_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
         .groups = "drop"
       ) |>
       dplyr::filter(.data$conflict)
-    
+
     if (nrow(conflicting_keys) > 0) {
       stop(
         paste0(
@@ -2867,7 +2868,7 @@ build_wr_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
       )
     }
   }
-  
+
   completeness_columns <- c(
     "routes", "targets", "receptions", "receiving_yards", "receiving_td",
     "air_yards", "end_zone_targets", "first_read_targets",
@@ -2885,7 +2886,7 @@ build_wr_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
     ) |>
     dplyr::distinct(.data$season, .data$week, .data$player_key, .keep_all = TRUE) |>
     dplyr::select(-dplyr::all_of(".wr_row_completeness"))
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -2895,7 +2896,7 @@ build_wr_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
       na = ""
     )
   }
-  
+
   wr_weekly
 }
 
@@ -2905,7 +2906,7 @@ build_wr_team_week_opportunity_table <- function(
     output_dir = model_paths$foundation_output_dir
 ) {
   load_model_core_packages()
-  
+
   out <- wr_weekly |>
     dplyr::filter(.data$wr_model_eligible) |>
     dplyr::group_by(.data$season, .data$week, .data$team) |>
@@ -2922,7 +2923,7 @@ build_wr_team_week_opportunity_table <- function(
       team_wr_half_ppr = sum(.data$half_ppr_points, na.rm = TRUE),
       .groups = "drop"
     )
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -2932,7 +2933,7 @@ build_wr_team_week_opportunity_table <- function(
       na = ""
     )
   }
-  
+
   out
 }
 
@@ -2943,7 +2944,7 @@ build_wr_player_share_table <- function(
     output_dir = model_paths$foundation_output_dir
 ) {
   load_model_core_packages()
-  
+
   out <- wr_weekly |>
     dplyr::left_join(team_week, by = c("season", "week", "team")) |>
     dplyr::mutate(
@@ -2957,7 +2958,7 @@ build_wr_player_share_table <- function(
       team_fantasy_share = safe_div(.data$half_ppr_points, .data$team_wr_half_ppr),
       starter_flag = dplyr::if_else(!is.na(.data$depth_team) & .data$depth_team <= 1, 1L, 0L)
     )
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -2967,7 +2968,7 @@ build_wr_player_share_table <- function(
       na = ""
     )
   }
-  
+
   out
 }
 
@@ -2977,7 +2978,7 @@ build_wr_team_context_base <- function(
     output_dir = model_paths$wow_output_dir
 ) {
   load_model_core_packages()
-  
+
   out <- wr_share |>
     dplyr::distinct(
       .data$season,
@@ -3017,7 +3018,7 @@ build_wr_team_context_base <- function(
       rolling6_team_wr_total_td = rolling_mean_vec(.data$team_wr_total_td, 6)
     ) |>
     dplyr::ungroup()
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -3027,16 +3028,16 @@ build_wr_team_context_base <- function(
       na = ""
     )
   }
-  
+
   out
 }
 
 build_wr_weekly_feature_base <- function(write_output = FALSE, output_dir = model_paths$wow_output_dir) {
   load_model_core_packages()
-  
+
   wr_share <- build_wr_player_share_table(write_output = FALSE)
   wr_team_context <- build_wr_team_context_base(wr_share, write_output = write_output, output_dir = output_dir)
-  
+
   out <- wr_share |>
     dplyr::filter(.data$wr_model_eligible) |>
     dplyr::left_join(
@@ -3132,7 +3133,7 @@ build_wr_weekly_feature_base <- function(write_output = FALSE, output_dir = mode
       target_week_fp = .data$next_week_fantasy_points
     ) |>
     dplyr::ungroup()
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -3142,15 +3143,15 @@ build_wr_weekly_feature_base <- function(write_output = FALSE, output_dir = mode
       na = ""
     )
   }
-  
+
   out
 }
 
 build_wr_wow_inputs <- function(write_output = FALSE) {
   load_model_core_packages()
-  
+
   wr_weekly_feature_base <- build_wr_weekly_feature_base(write_output = write_output)
-  
+
   out <- list(
     position = "WR",
     mode = "week_over_week",
@@ -3164,7 +3165,7 @@ build_wr_wow_inputs <- function(write_output = FALSE) {
       "Build calibrated WR weekly ranges and finish probabilities from the projected weekly board."
     )
   )
-  
+
   if (write_output) {
     out$output_paths <- c(
       wr_weekly_base = write_wow_weekly_base("WR"),
@@ -3172,14 +3173,14 @@ build_wr_wow_inputs <- function(write_output = FALSE) {
       wr_team_context_base = file.path(model_paths$wow_output_dir, "wr_team_context_base_2021_2025.csv")
     )
   }
-  
+
   out
 }
 
 make_wr_wow_output_manifest <- function(wr_wow_result) {
   output_paths <- unname(wr_wow_result$output_paths %||% character())
   output_labels <- names(wr_wow_result$output_paths %||% character())
-  
+
   data.frame(
     output_name = output_labels,
     output_path = output_paths,
@@ -3190,12 +3191,12 @@ make_wr_wow_output_manifest <- function(wr_wow_result) {
 
 run_wr_wow_pipeline <- function(write_output = TRUE) {
   load_model_core_packages()
-  
+
   dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
-  
+
   wr_wow_result <- build_wr_wow_inputs(write_output = write_output)
   wr_wow_board_rebuild <- run_wr_wow_board_rebuild(write_output = write_output)
-  
+
   output_paths <- c(
     wr_wow_result$output_paths %||% character(),
     wr_wow_feature_overlay = file.path(model_paths$wow_output_dir, "wr_wow_feature_overlay_2021_2025.csv"),
@@ -3203,10 +3204,10 @@ run_wr_wow_pipeline <- function(write_output = TRUE) {
     wr_wow_board_summary = file.path(model_paths$wow_output_dir, "wr_wow_board_summary_2021_2025.csv"),
     wr_wow_final_export = file.path(model_paths$wow_output_dir, "wr_wow_final_export_2021_2025.csv")
   )
-  
+
   wr_wow_result$output_paths <- output_paths
   output_manifest <- make_wr_wow_output_manifest(wr_wow_result)
-  
+
   list(
     result = wr_wow_result,
     board = wr_wow_board_rebuild$board,
@@ -3218,7 +3219,7 @@ run_wr_wow_pipeline <- function(write_output = TRUE) {
 
 build_wr_prior_season_week1_summary <- function(wr_wow_feature_base) {
   load_model_core_packages()
-  
+
   season_summary <- wr_wow_feature_base |>
     dplyr::mutate(
       player_key = as.character(.data$player_key),
@@ -3246,7 +3247,7 @@ build_wr_prior_season_week1_summary <- function(wr_wow_feature_base) {
       season_total_td_pg = ifelse(season_games > 0, mean(.data$total_td, na.rm = TRUE), NA_real_),
       .groups = "drop"
     )
-  
+
   prior_summary <- season_summary |>
     dplyr::transmute(
       player_key = .data$player_key,
@@ -3262,17 +3263,17 @@ build_wr_prior_season_week1_summary <- function(wr_wow_feature_base) {
       prior_season_first_downs_pg = .data$season_first_downs_pg,
       prior_season_total_td_pg = .data$season_total_td_pg
     )
-  
+
   target_rows <- season_summary |>
     dplyr::distinct(.data$player_key, .data$season)
-  
+
   career_summary <- lapply(seq_len(nrow(target_rows)), function(i) {
     player_key_i <- target_rows$player_key[[i]]
     season_i <- target_rows$season[[i]]
-    
+
     hist <- season_summary |>
       dplyr::filter(.data$player_key == player_key_i, .data$season < season_i, .data$season_games > 0)
-    
+
     if (nrow(hist) == 0) {
       return(data.frame(
         player_key = player_key_i,
@@ -3293,11 +3294,11 @@ build_wr_prior_season_week1_summary <- function(wr_wow_feature_base) {
         stringsAsFactors = FALSE
       ))
     }
-    
+
     total_games <- sum(hist$season_games, na.rm = TRUE)
     total_fp <- sum(hist$season_total_fp, na.rm = TRUE)
     last_active <- max(hist$season, na.rm = TRUE)
-    
+
     data.frame(
       player_key = player_key_i,
       season = season_i,
@@ -3318,7 +3319,7 @@ build_wr_prior_season_week1_summary <- function(wr_wow_feature_base) {
     )
   }) |>
     dplyr::bind_rows()
-  
+
   target_rows |>
     dplyr::left_join(prior_summary, by = c("player_key", "season")) |>
     dplyr::left_join(career_summary, by = c("player_key", "season"))
@@ -3326,9 +3327,9 @@ build_wr_prior_season_week1_summary <- function(wr_wow_feature_base) {
 
 build_wr_wow_qb_context <- function() {
   load_model_core_packages()
-  
+
   qb_clean <- build_qb_clean_weekly_master(write_output = FALSE)
-  
+
   qb_clean |>
     dplyr::group_by(.data$season, .data$week, .data$team) |>
     dplyr::arrange(
@@ -3374,7 +3375,7 @@ build_wr_wow_qb_context <- function() {
 
 build_wr_wow_defense_context <- function(wr_wow_feature_base) {
   load_model_core_packages()
-  
+
   wr_wow_feature_base |>
     dplyr::group_by(feature_week = .data$week, season = .data$season, defense_team = .data$opponent) |>
     dplyr::summarise(
@@ -3408,15 +3409,15 @@ build_wr_wow_defense_context <- function(wr_wow_feature_base) {
 
 build_wr_wow_feature_overlay_table <- function(wr_wow_feature_base = NULL, write_output = TRUE, output_dir = model_paths$wow_output_dir) {
   load_model_core_packages()
-  
+
   if (is.null(wr_wow_feature_base)) {
     wr_wow_feature_base <- build_wr_weekly_feature_base(write_output = FALSE)
   }
-  
+
   wr_prior_season_summary <- build_wr_prior_season_week1_summary(wr_wow_feature_base)
   wr_qb_context <- build_wr_wow_qb_context()
   wr_defense_context <- build_wr_wow_defense_context(wr_wow_feature_base)
-  
+
   out <- wr_wow_feature_base |>
     dplyr::left_join(wr_prior_season_summary, by = c("player_key", "season")) |>
     dplyr::left_join(wr_qb_context, by = c("season", "feature_week", "team")) |>
@@ -3541,8 +3542,8 @@ build_wr_wow_feature_overlay_table <- function(wr_wow_feature_base = NULL, write
           0.05 * .data$td_redzone_component_0to100
       ),
       wr_weekly_omfg_historical_core = pmin(100, pmax(0,
-                                                      (.data$wr_weekly_omfg_raw - 10.693704755969726) /
-                                                        (86.5094651511017 - 10.693704755969726) * 100
+        (.data$wr_weekly_omfg_raw - 10.693704755969726) /
+          (86.5094651511017 - 10.693704755969726) * 100
       )),
       qb_context_quality_score = qb_wow_row_mean(
         qb_wow_percent_rank_0to100(.data$rolling3_lead_qb_pass_attempts),
@@ -3584,19 +3585,19 @@ build_wr_wow_feature_overlay_table <- function(wr_wow_feature_base = NULL, write
       ),
       preseason_anchor_score = dplyr::if_else(.data$is_true_rookie, pmin(.data$preseason_anchor_score_raw, 80), .data$preseason_anchor_score_raw),
       wr_in_season_omfg_score = pmin(100, pmax(0,
-                                               dplyr::if_else(
-                                                 .data$week == 1L,
-                                                 .data$preseason_anchor_score,
-                                                 .data$preseason_weight * .data$preseason_anchor_score + (1 - .data$preseason_weight) * .data$wr_weekly_omfg_historical_core
-                                               )
+        dplyr::if_else(
+          .data$week == 1L,
+          .data$preseason_anchor_score,
+          .data$preseason_weight * .data$preseason_anchor_score + (1 - .data$preseason_weight) * .data$wr_weekly_omfg_historical_core
+        )
       )),
       qb_context_modifier = pmin(1.08, pmax(0.90,
-                                            1 +
-                                              wr_wow_centered_rank(.data$qb_context_quality_score) * 0.08 -
-                                              dplyr::coalesce(.data$lead_qb_changed_flag, 0) * 0.04
+        1 +
+          wr_wow_centered_rank(.data$qb_context_quality_score) * 0.08 -
+          dplyr::coalesce(.data$lead_qb_changed_flag, 0) * 0.04
       )),
       wr_weekly_projection_context_score = pmin(100, pmax(0,
-                                                          .data$wr_in_season_omfg_score * .data$qb_context_modifier
+        .data$wr_in_season_omfg_score * .data$qb_context_modifier
       )),
       team_wr_pool_seed = dplyr::coalesce(
         0.55 * .data$rolling4_team_wr_half_ppr +
@@ -3622,21 +3623,21 @@ build_wr_wow_feature_overlay_table <- function(wr_wow_feature_base = NULL, write
           (!is.na(.data$practice_status) & !(.data$practice_status %in% c("Full", "Healthy")))
       ),
       allocation_weight_raw = pmax(0.01,
-                                   (
-                                     0.28 * dplyr::coalesce(.data$rolling4_target_share, .data$rolling6_target_share, 0) +
-                                       0.20 * dplyr::coalesce(.data$rolling4_route_share, .data$rolling6_route_share, 0) +
-                                       0.16 * dplyr::coalesce(.data$rolling4_air_share, .data$rolling6_air_share, 0) +
-                                       0.14 * dplyr::coalesce(.data$rolling4_first_read_share, .data$rolling6_first_read_share, 0) +
-                                       0.12 * dplyr::coalesce(.data$rolling4_first_down_share, .data$rolling6_first_down_share, 0) +
-                                       0.10 * dplyr::coalesce(.data$rolling4_fantasy_share, .data$rolling6_fantasy_share, 0)
-                                   ) *
-                                     pmin(1.22, pmax(0.78,
-                                                     1 +
-                                                       wr_wow_centered_rank(.data$wr_in_season_omfg_score) * 0.12 +
-                                                       wr_wow_centered_rank(.data$role_momentum_component_0to100) * 0.05 +
-                                                       wr_wow_centered_rank(.data$role_security_component_0to100) * 0.05 -
-                                                       dplyr::coalesce(.data$role_state_uncertainty_flag, 0) * 0.06
-                                     ))
+        (
+          0.28 * dplyr::coalesce(.data$rolling4_target_share, .data$rolling6_target_share, 0) +
+            0.20 * dplyr::coalesce(.data$rolling4_route_share, .data$rolling6_route_share, 0) +
+            0.16 * dplyr::coalesce(.data$rolling4_air_share, .data$rolling6_air_share, 0) +
+            0.14 * dplyr::coalesce(.data$rolling4_first_read_share, .data$rolling6_first_read_share, 0) +
+            0.12 * dplyr::coalesce(.data$rolling4_first_down_share, .data$rolling6_first_down_share, 0) +
+            0.10 * dplyr::coalesce(.data$rolling4_fantasy_share, .data$rolling6_fantasy_share, 0)
+        ) *
+          pmin(1.22, pmax(0.78,
+            1 +
+              wr_wow_centered_rank(.data$wr_in_season_omfg_score) * 0.12 +
+              wr_wow_centered_rank(.data$role_momentum_component_0to100) * 0.05 +
+              wr_wow_centered_rank(.data$role_security_component_0to100) * 0.05 -
+              dplyr::coalesce(.data$role_state_uncertainty_flag, 0) * 0.06
+          ))
       ),
       team_wr_pool_after_context = .data$team_wr_pool_seed * .data$qb_context_modifier * .data$matchup_modifier
     ) |>
@@ -3774,7 +3775,7 @@ build_wr_wow_feature_overlay_table <- function(wr_wow_feature_base = NULL, write
     ) |>
     dplyr::ungroup() |>
     dplyr::arrange(.data$season, .data$feature_week, .data$wr_wow_rank)
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -3784,13 +3785,13 @@ build_wr_wow_feature_overlay_table <- function(wr_wow_feature_base = NULL, write
       na = ""
     )
   }
-  
+
   out
 }
 
 build_wr_wow_board_summary <- function(wr_wow_board, write_output = TRUE) {
   load_model_core_packages()
-  
+
   week_metrics <- wr_wow_board |>
     dplyr::group_by(.data$season, .data$feature_week) |>
     dplyr::summarise(
@@ -3809,7 +3810,7 @@ build_wr_wow_board_summary <- function(wr_wow_board, write_output = TRUE) {
       predicts_week = .data$feature_week + 1L,
       is_scorable = as.integer(.data$n > 1 & is.finite(.data$spearman))
     )
-  
+
   summary_out <- week_metrics |>
     dplyr::group_by(.data$season) |>
     dplyr::summarise(
@@ -3842,7 +3843,7 @@ build_wr_wow_board_summary <- function(wr_wow_board, write_output = TRUE) {
       .groups = "drop"
     ) |>
     dplyr::arrange(.data$season)
-  
+
   if (write_output) {
     utils::write.csv(
       week_metrics,
@@ -3857,7 +3858,7 @@ build_wr_wow_board_summary <- function(wr_wow_board, write_output = TRUE) {
       na = ""
     )
   }
-  
+
   list(
     week_metrics = week_metrics,
     summary = summary_out
@@ -3866,7 +3867,7 @@ build_wr_wow_board_summary <- function(wr_wow_board, write_output = TRUE) {
 
 build_wr_wow_final_export <- function(wr_wow_board, write_output = TRUE) {
   load_model_core_packages()
-  
+
   out <- wr_wow_board |>
     dplyr::transmute(
       season = .data$season,
@@ -3911,7 +3912,7 @@ build_wr_wow_final_export <- function(wr_wow_board, write_output = TRUE) {
       actual_next_week_fp = .data$target_week_fp
     ) |>
     dplyr::arrange(.data$season, .data$week, .data$rank)
-  
+
   if (write_output) {
     utils::write.csv(
       out,
@@ -3920,17 +3921,17 @@ build_wr_wow_final_export <- function(wr_wow_board, write_output = TRUE) {
       na = ""
     )
   }
-  
+
   out
 }
 
 run_wr_wow_board_rebuild <- function(write_output = TRUE) {
   load_model_core_packages()
-  
+
   wr_wow_board <- build_wr_wow_feature_overlay_table(write_output = write_output)
   wr_wow_board_summary <- build_wr_wow_board_summary(wr_wow_board, write_output = write_output)
   wr_wow_final_export <- build_wr_wow_final_export(wr_wow_board, write_output = write_output)
-  
+
   list(
     board = wr_wow_board,
     board_summary = wr_wow_board_summary,
@@ -3945,12 +3946,12 @@ te_half_ppr_points_formula <- function(receiving_yards, receptions, total_td, ru
   receptions <- safe_numeric(receptions)
   total_td <- safe_numeric(total_td)
   rush_yards <- safe_numeric(rush_yards)
-  
+
   receiving_yards[!is.finite(receiving_yards)] <- 0
   receptions[!is.finite(receptions)] <- 0
   total_td[!is.finite(total_td)] <- 0
   rush_yards[!is.finite(rush_yards)] <- 0
-  
+
   receiving_yards / 10 +
     receptions * 0.5 +
     total_td * 6 +
@@ -3970,9 +3971,9 @@ te_wow_centered_rank <- function(x, higher_is_better = TRUE) {
 
 build_te_clean_weekly_master <- function(write_output = FALSE, output_dir = model_paths$foundation_output_dir) {
   load_model_core_packages()
-  
+
   te_raw <- load_position_hybrid("TE")
-  
+
   te_weekly <- te_raw |>
     dplyr::transmute(
       season = .data$season,
@@ -4092,11 +4093,11 @@ build_te_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
       ))
     ) |>
     dplyr::arrange(.data$season, .data$week, .data$team, .data$player)
-  
+
   duplicate_keys <- te_weekly |>
     dplyr::count(.data$season, .data$week, .data$player_key, name = "dup_n") |>
     dplyr::filter(.data$dup_n > 1)
-  
+
   if (nrow(duplicate_keys) > 0) {
     conflict_columns <- c(
       "team", "opponent", "position", "routes", "targets", "receptions",
@@ -4116,7 +4117,7 @@ build_te_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
         .groups = "drop"
       ) |>
       dplyr::filter(.data$conflict)
-    
+
     if (nrow(conflicting_keys) > 0) {
       stop(
         paste0(
@@ -4127,7 +4128,7 @@ build_te_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
       )
     }
   }
-  
+
   completeness_columns <- c(
     "routes", "targets", "receptions", "receiving_yards", "receiving_td",
     "air_yards", "end_zone_targets", "first_read_targets",
@@ -4145,7 +4146,7 @@ build_te_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
     ) |>
     dplyr::distinct(.data$season, .data$week, .data$player_key, .keep_all = TRUE) |>
     dplyr::select(-dplyr::all_of(".te_row_completeness"))
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -4155,7 +4156,7 @@ build_te_clean_weekly_master <- function(write_output = FALSE, output_dir = mode
       na = ""
     )
   }
-  
+
   te_weekly
 }
 
@@ -4165,7 +4166,7 @@ build_te_team_week_opportunity_table <- function(
     output_dir = model_paths$foundation_output_dir
 ) {
   load_model_core_packages()
-  
+
   out <- te_weekly |>
     dplyr::filter(.data$te_model_eligible) |>
     dplyr::group_by(.data$season, .data$week, .data$team) |>
@@ -4182,7 +4183,7 @@ build_te_team_week_opportunity_table <- function(
       team_te_half_ppr = sum(.data$half_ppr_points, na.rm = TRUE),
       .groups = "drop"
     )
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -4192,7 +4193,7 @@ build_te_team_week_opportunity_table <- function(
       na = ""
     )
   }
-  
+
   out
 }
 
@@ -4203,7 +4204,7 @@ build_te_player_share_table <- function(
     output_dir = model_paths$foundation_output_dir
 ) {
   load_model_core_packages()
-  
+
   out <- te_weekly |>
     dplyr::left_join(team_week, by = c("season", "week", "team")) |>
     dplyr::mutate(
@@ -4217,7 +4218,7 @@ build_te_player_share_table <- function(
       team_fantasy_share = safe_div(.data$half_ppr_points, .data$team_te_half_ppr),
       starter_flag = dplyr::if_else(!is.na(.data$depth_team) & .data$depth_team <= 1, 1L, 0L)
     )
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -4227,7 +4228,7 @@ build_te_player_share_table <- function(
       na = ""
     )
   }
-  
+
   out
 }
 
@@ -4237,7 +4238,7 @@ build_te_team_context_base <- function(
     output_dir = model_paths$wow_output_dir
 ) {
   load_model_core_packages()
-  
+
   out <- te_share |>
     dplyr::distinct(
       .data$season,
@@ -4277,7 +4278,7 @@ build_te_team_context_base <- function(
       rolling6_team_te_total_td = rolling_mean_vec(.data$team_te_total_td, 6)
     ) |>
     dplyr::ungroup()
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -4287,16 +4288,16 @@ build_te_team_context_base <- function(
       na = ""
     )
   }
-  
+
   out
 }
 
 build_te_weekly_feature_base <- function(write_output = FALSE, output_dir = model_paths$wow_output_dir) {
   load_model_core_packages()
-  
+
   te_share <- build_te_player_share_table(write_output = FALSE)
   te_team_context <- build_te_team_context_base(te_share, write_output = write_output, output_dir = output_dir)
-  
+
   out <- te_share |>
     dplyr::filter(.data$te_model_eligible) |>
     dplyr::left_join(
@@ -4392,7 +4393,7 @@ build_te_weekly_feature_base <- function(write_output = FALSE, output_dir = mode
       target_week_fp = .data$next_week_fantasy_points
     ) |>
     dplyr::ungroup()
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -4402,15 +4403,15 @@ build_te_weekly_feature_base <- function(write_output = FALSE, output_dir = mode
       na = ""
     )
   }
-  
+
   out
 }
 
 build_te_wow_inputs <- function(write_output = FALSE) {
   load_model_core_packages()
-  
+
   te_weekly_feature_base <- build_te_weekly_feature_base(write_output = write_output)
-  
+
   out <- list(
     position = "TE",
     mode = "week_over_week",
@@ -4424,7 +4425,7 @@ build_te_wow_inputs <- function(write_output = FALSE) {
       "Build calibrated TE weekly ranges and finish probabilities from the projected weekly board."
     )
   )
-  
+
   if (write_output) {
     out$output_paths <- c(
       te_weekly_base = write_wow_weekly_base("TE"),
@@ -4432,14 +4433,14 @@ build_te_wow_inputs <- function(write_output = FALSE) {
       te_team_context_base = file.path(model_paths$wow_output_dir, "te_team_context_base_2021_2025.csv")
     )
   }
-  
+
   out
 }
 
 make_te_wow_output_manifest <- function(te_wow_result) {
   output_paths <- unname(te_wow_result$output_paths %||% character())
   output_labels <- names(te_wow_result$output_paths %||% character())
-  
+
   data.frame(
     output_name = output_labels,
     output_path = output_paths,
@@ -4450,12 +4451,12 @@ make_te_wow_output_manifest <- function(te_wow_result) {
 
 run_te_wow_pipeline <- function(write_output = TRUE) {
   load_model_core_packages()
-  
+
   dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
-  
+
   te_wow_result <- build_te_wow_inputs(write_output = write_output)
   te_wow_board_rebuild <- run_te_wow_board_rebuild(write_output = write_output)
-  
+
   output_paths <- c(
     te_wow_result$output_paths %||% character(),
     te_wow_feature_overlay = file.path(model_paths$wow_output_dir, "te_wow_feature_overlay_2021_2025.csv"),
@@ -4463,10 +4464,10 @@ run_te_wow_pipeline <- function(write_output = TRUE) {
     te_wow_board_summary = file.path(model_paths$wow_output_dir, "te_wow_board_summary_2021_2025.csv"),
     te_wow_final_export = file.path(model_paths$wow_output_dir, "te_wow_final_export_2021_2025.csv")
   )
-  
+
   te_wow_result$output_paths <- output_paths
   output_manifest <- make_te_wow_output_manifest(te_wow_result)
-  
+
   list(
     result = te_wow_result,
     board = te_wow_board_rebuild$board,
@@ -4478,7 +4479,7 @@ run_te_wow_pipeline <- function(write_output = TRUE) {
 
 build_te_prior_season_week1_summary <- function(te_wow_feature_base) {
   load_model_core_packages()
-  
+
   season_summary <- te_wow_feature_base |>
     dplyr::mutate(
       player_key = as.character(.data$player_key),
@@ -4506,7 +4507,7 @@ build_te_prior_season_week1_summary <- function(te_wow_feature_base) {
       season_total_td_pg = ifelse(season_games > 0, mean(.data$total_td, na.rm = TRUE), NA_real_),
       .groups = "drop"
     )
-  
+
   prior_summary <- season_summary |>
     dplyr::transmute(
       player_key = .data$player_key,
@@ -4522,17 +4523,17 @@ build_te_prior_season_week1_summary <- function(te_wow_feature_base) {
       prior_season_first_downs_pg = .data$season_first_downs_pg,
       prior_season_total_td_pg = .data$season_total_td_pg
     )
-  
+
   target_rows <- season_summary |>
     dplyr::distinct(.data$player_key, .data$season)
-  
+
   career_summary <- lapply(seq_len(nrow(target_rows)), function(i) {
     player_key_i <- target_rows$player_key[[i]]
     season_i <- target_rows$season[[i]]
-    
+
     hist <- season_summary |>
       dplyr::filter(.data$player_key == player_key_i, .data$season < season_i, .data$season_games > 0)
-    
+
     if (nrow(hist) == 0) {
       return(data.frame(
         player_key = player_key_i,
@@ -4553,11 +4554,11 @@ build_te_prior_season_week1_summary <- function(te_wow_feature_base) {
         stringsAsFactors = FALSE
       ))
     }
-    
+
     total_games <- sum(hist$season_games, na.rm = TRUE)
     total_fp <- sum(hist$season_total_fp, na.rm = TRUE)
     last_active <- max(hist$season, na.rm = TRUE)
-    
+
     data.frame(
       player_key = player_key_i,
       season = season_i,
@@ -4578,7 +4579,7 @@ build_te_prior_season_week1_summary <- function(te_wow_feature_base) {
     )
   }) |>
     dplyr::bind_rows()
-  
+
   target_rows |>
     dplyr::left_join(prior_summary, by = c("player_key", "season")) |>
     dplyr::left_join(career_summary, by = c("player_key", "season"))
@@ -4586,9 +4587,9 @@ build_te_prior_season_week1_summary <- function(te_wow_feature_base) {
 
 build_te_wow_qb_context <- function() {
   load_model_core_packages()
-  
+
   qb_clean <- build_qb_clean_weekly_master(write_output = FALSE)
-  
+
   qb_clean |>
     dplyr::group_by(.data$season, .data$week, .data$team) |>
     dplyr::arrange(
@@ -4634,7 +4635,7 @@ build_te_wow_qb_context <- function() {
 
 build_te_wow_defense_context <- function(te_wow_feature_base) {
   load_model_core_packages()
-  
+
   te_wow_feature_base |>
     dplyr::group_by(feature_week = .data$week, season = .data$season, defense_team = .data$opponent) |>
     dplyr::summarise(
@@ -4668,15 +4669,15 @@ build_te_wow_defense_context <- function(te_wow_feature_base) {
 
 build_te_wow_feature_overlay_table <- function(te_wow_feature_base = NULL, write_output = TRUE, output_dir = model_paths$wow_output_dir) {
   load_model_core_packages()
-  
+
   if (is.null(te_wow_feature_base)) {
     te_wow_feature_base <- build_te_weekly_feature_base(write_output = FALSE)
   }
-  
+
   te_prior_season_summary <- build_te_prior_season_week1_summary(te_wow_feature_base)
   te_qb_context <- build_te_wow_qb_context()
   te_defense_context <- build_te_wow_defense_context(te_wow_feature_base)
-  
+
   out <- te_wow_feature_base |>
     dplyr::left_join(te_prior_season_summary, by = c("player_key", "season")) |>
     dplyr::left_join(te_qb_context, by = c("season", "feature_week", "team")) |>
@@ -4869,19 +4870,19 @@ build_te_wow_feature_overlay_table <- function(te_wow_feature_base = NULL, write
       ),
       preseason_anchor_score = dplyr::if_else(.data$is_true_rookie, pmin(.data$preseason_anchor_score_raw, 80), .data$preseason_anchor_score_raw),
       te_in_season_omfg_score = pmin(100, pmax(0,
-                                               dplyr::if_else(
-                                                 .data$week == 1L,
-                                                 .data$preseason_anchor_score,
-                                                 .data$preseason_weight * .data$preseason_anchor_score + (1 - .data$preseason_weight) * .data$te_weekly_omfg_historical_core
-                                               )
+        dplyr::if_else(
+          .data$week == 1L,
+          .data$preseason_anchor_score,
+          .data$preseason_weight * .data$preseason_anchor_score + (1 - .data$preseason_weight) * .data$te_weekly_omfg_historical_core
+        )
       )),
       qb_context_modifier = pmin(1.08, pmax(0.90,
-                                            1 +
-                                              te_wow_centered_rank(.data$qb_context_quality_score) * 0.08 -
-                                              dplyr::coalesce(.data$lead_qb_changed_flag, 0) * 0.04
+        1 +
+          te_wow_centered_rank(.data$qb_context_quality_score) * 0.08 -
+          dplyr::coalesce(.data$lead_qb_changed_flag, 0) * 0.04
       )),
       te_weekly_projection_context_score = pmin(100, pmax(0,
-                                                          .data$te_in_season_omfg_score * .data$qb_context_modifier
+        .data$te_in_season_omfg_score * .data$qb_context_modifier
       )),
       team_te_pool_seed = dplyr::coalesce(
         0.55 * .data$rolling4_team_te_half_ppr +
@@ -4907,21 +4908,21 @@ build_te_wow_feature_overlay_table <- function(te_wow_feature_base = NULL, write
           (!is.na(.data$practice_status) & !(.data$practice_status %in% c("Full", "Healthy")))
       ),
       allocation_weight_raw = pmax(0.01,
-                                   (
-                                     0.28 * dplyr::coalesce(.data$rolling4_target_share, .data$rolling6_target_share, 0) +
-                                       0.20 * dplyr::coalesce(.data$rolling4_route_share, .data$rolling6_route_share, 0) +
-                                       0.16 * dplyr::coalesce(.data$rolling4_air_share, .data$rolling6_air_share, 0) +
-                                       0.14 * dplyr::coalesce(.data$rolling4_first_read_share, .data$rolling6_first_read_share, 0) +
-                                       0.12 * dplyr::coalesce(.data$rolling4_first_down_share, .data$rolling6_first_down_share, 0) +
-                                       0.10 * dplyr::coalesce(.data$rolling4_fantasy_share, .data$rolling6_fantasy_share, 0)
-                                   ) *
-                                     pmin(1.22, pmax(0.78,
-                                                     1 +
-                                                       te_wow_centered_rank(.data$te_in_season_omfg_score) * 0.12 +
-                                                       te_wow_centered_rank(.data$role_momentum_component_0to100) * 0.05 +
-                                                       te_wow_centered_rank(.data$role_security_component_0to100) * 0.05 -
-                                                       dplyr::coalesce(.data$role_state_uncertainty_flag, 0) * 0.06
-                                     ))
+        (
+          0.28 * dplyr::coalesce(.data$rolling4_target_share, .data$rolling6_target_share, 0) +
+            0.20 * dplyr::coalesce(.data$rolling4_route_share, .data$rolling6_route_share, 0) +
+            0.16 * dplyr::coalesce(.data$rolling4_air_share, .data$rolling6_air_share, 0) +
+            0.14 * dplyr::coalesce(.data$rolling4_first_read_share, .data$rolling6_first_read_share, 0) +
+            0.12 * dplyr::coalesce(.data$rolling4_first_down_share, .data$rolling6_first_down_share, 0) +
+            0.10 * dplyr::coalesce(.data$rolling4_fantasy_share, .data$rolling6_fantasy_share, 0)
+        ) *
+          pmin(1.22, pmax(0.78,
+            1 +
+              te_wow_centered_rank(.data$te_in_season_omfg_score) * 0.12 +
+              te_wow_centered_rank(.data$role_momentum_component_0to100) * 0.05 +
+              te_wow_centered_rank(.data$role_security_component_0to100) * 0.05 -
+              dplyr::coalesce(.data$role_state_uncertainty_flag, 0) * 0.06
+          ))
       ),
       team_te_pool_after_context = .data$team_te_pool_seed * .data$qb_context_modifier * .data$matchup_modifier
     ) |>
@@ -5059,7 +5060,7 @@ build_te_wow_feature_overlay_table <- function(te_wow_feature_base = NULL, write
     ) |>
     dplyr::ungroup() |>
     dplyr::arrange(.data$season, .data$feature_week, .data$te_wow_rank)
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -5069,13 +5070,13 @@ build_te_wow_feature_overlay_table <- function(te_wow_feature_base = NULL, write
       na = ""
     )
   }
-  
+
   out
 }
 
 build_te_wow_board_summary <- function(te_wow_board, write_output = TRUE) {
   load_model_core_packages()
-  
+
   week_metrics <- te_wow_board |>
     dplyr::group_by(.data$season, .data$feature_week) |>
     dplyr::summarise(
@@ -5094,7 +5095,7 @@ build_te_wow_board_summary <- function(te_wow_board, write_output = TRUE) {
       predicts_week = .data$feature_week + 1L,
       is_scorable = as.integer(.data$n > 1 & is.finite(.data$spearman))
     )
-  
+
   summary_out <- week_metrics |>
     dplyr::group_by(.data$season) |>
     dplyr::summarise(
@@ -5127,7 +5128,7 @@ build_te_wow_board_summary <- function(te_wow_board, write_output = TRUE) {
       .groups = "drop"
     ) |>
     dplyr::arrange(.data$season)
-  
+
   if (write_output) {
     utils::write.csv(
       week_metrics,
@@ -5142,7 +5143,7 @@ build_te_wow_board_summary <- function(te_wow_board, write_output = TRUE) {
       na = ""
     )
   }
-  
+
   list(
     week_metrics = week_metrics,
     summary = summary_out
@@ -5151,7 +5152,7 @@ build_te_wow_board_summary <- function(te_wow_board, write_output = TRUE) {
 
 build_te_wow_final_export <- function(te_wow_board, write_output = TRUE) {
   load_model_core_packages()
-  
+
   out <- te_wow_board |>
     dplyr::transmute(
       season = .data$season,
@@ -5196,7 +5197,7 @@ build_te_wow_final_export <- function(te_wow_board, write_output = TRUE) {
       actual_next_week_fp = .data$target_week_fp
     ) |>
     dplyr::arrange(.data$season, .data$week, .data$rank)
-  
+
   if (write_output) {
     utils::write.csv(
       out,
@@ -5205,17 +5206,17 @@ build_te_wow_final_export <- function(te_wow_board, write_output = TRUE) {
       na = ""
     )
   }
-  
+
   out
 }
 
 run_te_wow_board_rebuild <- function(write_output = TRUE) {
   load_model_core_packages()
-  
+
   te_wow_board <- build_te_wow_feature_overlay_table(write_output = write_output)
   te_wow_board_summary <- build_te_wow_board_summary(te_wow_board, write_output = write_output)
   te_wow_final_export <- build_te_wow_final_export(te_wow_board, write_output = write_output)
-  
+
   list(
     board = te_wow_board,
     board_summary = te_wow_board_summary,
@@ -5236,7 +5237,7 @@ k_wow_centered_rank <- function(x, higher_is_better = TRUE) {
 
 k_wow_roof_score_0to100 <- function(roof_vec) {
   roof_chr <- trimws(tolower(as.character(roof_vec)))
-  
+
   dplyr::case_when(
     grepl("dome|indoor|closed", roof_chr) ~ 100,
     grepl("retract", roof_chr) ~ 88,
@@ -5248,7 +5249,7 @@ k_wow_roof_score_0to100 <- function(roof_vec) {
 
 k_wow_surface_score_0to100 <- function(surface_vec) {
   surface_chr <- trimws(tolower(as.character(surface_vec)))
-  
+
   dplyr::case_when(
     grepl("turf|synthetic|artificial", surface_chr) ~ 72,
     grepl("grass|bermuda|kentucky", surface_chr) ~ 60,
@@ -5260,7 +5261,7 @@ k_wow_surface_score_0to100 <- function(surface_vec) {
 k_wow_weather_score_0to100 <- function(wind_vec, roof_vec) {
   wind_num <- safe_numeric(wind_vec)
   roof_score <- k_wow_roof_score_0to100(roof_vec)
-  
+
   wind_score <- dplyr::case_when(
     !is.finite(wind_num) ~ 66,
     wind_num <= 5 ~ 100,
@@ -5270,13 +5271,13 @@ k_wow_weather_score_0to100 <- function(wind_vec, roof_vec) {
     wind_num <= 25 ~ 34,
     TRUE ~ 18
   )
-  
+
   ifelse(roof_score >= 95, 100, wind_score)
 }
 
 k_wow_spread_context_score_0to100 <- function(spread_vec) {
   spread_abs <- abs(safe_numeric(spread_vec))
-  
+
   dplyr::case_when(
     !is.finite(spread_abs) ~ 56,
     spread_abs <= 1 ~ 100,
@@ -5291,7 +5292,7 @@ k_wow_spread_context_score_0to100 <- function(spread_vec) {
 
 build_k_sos_prior_reference <- function(sos_path = file.path(model_paths$sos_output_dir, "k_sos_final_export_2022_2025.csv")) {
   load_model_core_packages()
-  
+
   empty_out <- data.frame(
     season = integer(),
     player_key = character(),
@@ -5305,17 +5306,17 @@ build_k_sos_prior_reference <- function(sos_path = file.path(model_paths$sos_out
     k_sos_accuracy_prior = double(),
     stringsAsFactors = FALSE
   )
-  
+
   if (!file.exists(sos_path)) {
     return(empty_out)
   }
-  
+
   sos_raw <- read_csv_flexible(sos_path)
-  
+
   if (!all(c("season", "player") %in% names(sos_raw))) {
     return(empty_out)
   }
-  
+
   sos_raw |>
     dplyr::transmute(
       season = safe_integer(.data$season),
@@ -5335,10 +5336,10 @@ build_k_sos_prior_reference <- function(sos_path = file.path(model_paths$sos_out
 
 build_k_clean_weekly_master <- function(write_output = FALSE, output_dir = model_paths$foundation_output_dir) {
   load_model_core_packages()
-  
+
   k_raw <- load_position_hybrid("K")
   k_team_context <- build_team_week_context_reference()
-  
+
   k_weekly <- k_raw |>
     dplyr::transmute(
       season = .data$season,
@@ -5448,11 +5449,11 @@ build_k_clean_weekly_master <- function(write_output = FALSE, output_dir = model
     ) |>
     dplyr::filter(!is.na(.data$season), !is.na(.data$week), .data$week >= 1, .data$week <= 18) |>
     dplyr::arrange(.data$season, .data$week, .data$team, .data$player)
-  
+
   duplicate_keys <- k_weekly |>
     dplyr::count(.data$season, .data$week, .data$player_key, name = "dup_n") |>
     dplyr::filter(.data$dup_n > 1)
-  
+
   production_columns <- c(
     "fgm_0_19", "fga_0_19", "fgm_20_29", "fga_20_29",
     "fgm_30_39", "fga_30_39", "fgm_40_49", "fga_40_49",
@@ -5472,7 +5473,7 @@ build_k_clean_weekly_master <- function(write_output = FALSE, output_dir = model
         .groups = "drop"
       ) |>
       dplyr::filter(.data$conflict)
-    
+
     if (nrow(conflicting_production) > 0) {
       stop(
         paste0(
@@ -5483,7 +5484,7 @@ build_k_clean_weekly_master <- function(write_output = FALSE, output_dir = model
       )
     }
   }
-  
+
   primary_kickers <- k_weekly |>
     dplyr::filter(
       (!is.na(.data$depth_team) & .data$depth_team <= 1) |
@@ -5493,7 +5494,7 @@ build_k_clean_weekly_master <- function(write_output = FALSE, output_dir = model
     dplyr::arrange(.data$season, .data$week, .data$team, .data$depth_team, .data$player_key) |>
     dplyr::distinct(.data$season, .data$week, .data$team, .keep_all = TRUE) |>
     dplyr::transmute(season, week, team, primary_kicker_key = .data$player_key)
-  
+
   completeness_columns <- c(
     production_columns, "depth_team", "k_depth_role", "opponent",
     "team_total_line", "team_spread_line", "game_temp", "game_wind"
@@ -5510,7 +5511,7 @@ build_k_clean_weekly_master <- function(write_output = FALSE, output_dir = model
       ),
       .k_row_completeness = rowSums(!is.na(dplyr::pick(dplyr::all_of(completeness_columns))))
     )
-  
+
   unresolved_team_conflicts <- k_weekly |>
     dplyr::semi_join(duplicate_keys, by = c("season", "week", "player_key")) |>
     dplyr::group_by(.data$season, .data$week, .data$player_key) |>
@@ -5522,7 +5523,7 @@ build_k_clean_weekly_master <- function(write_output = FALSE, output_dir = model
       .groups = "drop"
     ) |>
     dplyr::filter(.data$team_count > 1, .data$best_team_count != 1)
-  
+
   if (nrow(unresolved_team_conflicts) > 0) {
     stop(
       paste0(
@@ -5532,7 +5533,7 @@ build_k_clean_weekly_master <- function(write_output = FALSE, output_dir = model
       call. = FALSE
     )
   }
-  
+
   k_weekly <- k_weekly |>
     dplyr::arrange(
       .data$season, .data$week, .data$player_key,
@@ -5542,7 +5543,7 @@ build_k_clean_weekly_master <- function(write_output = FALSE, output_dir = model
     ) |>
     dplyr::distinct(.data$season, .data$week, .data$player_key, .keep_all = TRUE) |>
     dplyr::select(-dplyr::all_of(c("primary_kicker_key", ".k_competing_primary", ".k_row_completeness")))
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -5552,13 +5553,13 @@ build_k_clean_weekly_master <- function(write_output = FALSE, output_dir = model
       na = ""
     )
   }
-  
+
   k_weekly
 }
 
 build_k_team_week_opportunity_table <- function(k_weekly = build_k_clean_weekly_master(), write_output = FALSE, output_dir = model_paths$foundation_output_dir) {
   load_model_core_packages()
-  
+
   out <- k_weekly |>
     dplyr::group_by(.data$season, .data$week, .data$team) |>
     dplyr::summarise(
@@ -5576,7 +5577,7 @@ build_k_team_week_opportunity_table <- function(k_weekly = build_k_clean_weekly_
       team_k_fantasy_points = sum(.data$fantasy_points_official, na.rm = TRUE),
       .groups = "drop"
     )
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -5586,7 +5587,7 @@ build_k_team_week_opportunity_table <- function(k_weekly = build_k_clean_weekly_
       na = ""
     )
   }
-  
+
   out
 }
 
@@ -5597,7 +5598,7 @@ build_k_player_share_table <- function(
     output_dir = model_paths$foundation_output_dir
 ) {
   load_model_core_packages()
-  
+
   out <- k_weekly |>
     dplyr::left_join(team_week, by = c("season", "week", "team")) |>
     dplyr::mutate(
@@ -5607,7 +5608,7 @@ build_k_player_share_table <- function(
       xpm_share = safe_div(.data$extra_points_made, .data$team_xpm),
       fantasy_point_share = safe_div(.data$fantasy_points_official, .data$team_k_fantasy_points)
     )
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -5617,7 +5618,7 @@ build_k_player_share_table <- function(
       na = ""
     )
   }
-  
+
   out
 }
 
@@ -5627,7 +5628,7 @@ build_k_weekly_role_usage_table <- function(
     output_dir = model_paths$foundation_output_dir
 ) {
   load_model_core_packages()
-  
+
   out <- k_share |>
     dplyr::transmute(
       season,
@@ -5663,7 +5664,7 @@ build_k_weekly_role_usage_table <- function(
       xpm_share,
       fantasy_point_share
     )
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -5673,21 +5674,21 @@ build_k_weekly_role_usage_table <- function(
       na = ""
     )
   }
-  
+
   out
 }
 
 build_k_weekly_feature_base <- function(write_output = FALSE, output_dir = model_paths$wow_output_dir) {
   load_model_core_packages()
-  
+
   k_weekly <- build_k_clean_weekly_master(write_output = write_output)
   k_team_week <- build_k_team_week_opportunity_table(k_weekly = k_weekly, write_output = write_output)
-  
+
   required_team_cols <- c(
     "team_fga", "team_fgm", "team_xpa", "team_xpm",
     "team_long_fg_att", "team_long_fg_made", "team_k_fantasy_points"
   )
-  
+
   if (!all(required_team_cols %in% names(k_team_week))) {
     rebuilt_team_week <- k_weekly |>
       dplyr::group_by(.data$season, .data$week, .data$team) |>
@@ -5701,7 +5702,7 @@ build_k_weekly_feature_base <- function(write_output = FALSE, output_dir = model
         team_k_fantasy_points = sum(.data$fantasy_points_official, na.rm = TRUE),
         .groups = "drop"
       )
-    
+
     k_team_week <- rebuilt_team_week |>
       dplyr::left_join(k_team_week, by = c("season", "week", "team"), suffix = c("", "_old")) |>
       dplyr::mutate(
@@ -5715,7 +5716,7 @@ build_k_weekly_feature_base <- function(write_output = FALSE, output_dir = model
       ) |>
       dplyr::select(-dplyr::ends_with("_old"))
   }
-  
+
   k_team_history <- k_team_week |>
     dplyr::arrange(.data$team, .data$season, .data$week) |>
     dplyr::group_by(.data$team, .data$season) |>
@@ -5746,7 +5747,7 @@ build_k_weekly_feature_base <- function(write_output = FALSE, output_dir = model
       team_trend_fg_settle_3v5 = .data$team_rolling3_fg_settle_rate - .data$team_rolling5_fg_settle_rate
     ) |>
     dplyr::ungroup()
-  
+
   out <- k_weekly |>
     dplyr::left_join(
       k_team_history,
@@ -5805,7 +5806,7 @@ build_k_weekly_feature_base <- function(write_output = FALSE, output_dir = model
       target_week_fp = .data$next_week_fantasy_points
     ) |>
     dplyr::ungroup()
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -5815,15 +5816,15 @@ build_k_weekly_feature_base <- function(write_output = FALSE, output_dir = model
       na = ""
     )
   }
-  
+
   out
 }
 
 build_k_wow_inputs <- function(write_output = FALSE) {
   load_model_core_packages()
-  
+
   k_weekly_feature_base <- build_k_weekly_feature_base(write_output = write_output)
-  
+
   out <- list(
     position = "K",
     mode = "week_over_week",
@@ -5838,7 +5839,7 @@ build_k_wow_inputs <- function(write_output = FALSE) {
       "Layer DST allowance next so the same special-teams framework can cover kickers and team defenses."
     )
   )
-  
+
   if (write_output) {
     out$output_paths <- c(
       k_wow_weekly_base = write_wow_weekly_base("K"),
@@ -5846,14 +5847,14 @@ build_k_wow_inputs <- function(write_output = FALSE) {
       k_weekly_feature_base = file.path(model_paths$wow_output_dir, "k_weekly_feature_base_2021_2025_regular.csv")
     )
   }
-  
+
   out
 }
 
 make_k_wow_output_manifest <- function(k_wow_result) {
   output_paths <- unname(k_wow_result$output_paths %||% character())
   output_labels <- names(k_wow_result$output_paths %||% character())
-  
+
   data.frame(
     output_name = output_labels,
     output_path = output_paths,
@@ -5864,12 +5865,12 @@ make_k_wow_output_manifest <- function(k_wow_result) {
 
 run_k_wow_pipeline <- function(write_output = TRUE) {
   load_model_core_packages()
-  
+
   dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
-  
+
   k_wow_result <- build_k_wow_inputs(write_output = write_output)
   k_wow_board_rebuild <- run_k_wow_board_rebuild(write_output = write_output)
-  
+
   output_paths <- c(
     k_wow_result$output_paths %||% character(),
     k_wow_feature_overlay = file.path(model_paths$wow_output_dir, "k_wow_feature_overlay_2021_2025.csv"),
@@ -5877,10 +5878,10 @@ run_k_wow_pipeline <- function(write_output = TRUE) {
     k_wow_board_summary = file.path(model_paths$wow_output_dir, "k_wow_board_summary_2021_2025.csv"),
     k_wow_final_export = file.path(model_paths$wow_output_dir, "k_wow_final_export_2021_2025.csv")
   )
-  
+
   k_wow_result$output_paths <- output_paths
   output_manifest <- make_k_wow_output_manifest(k_wow_result)
-  
+
   list(
     result = k_wow_result,
     board = k_wow_board_rebuild$board,
@@ -5892,7 +5893,7 @@ run_k_wow_pipeline <- function(write_output = TRUE) {
 
 build_k_prior_season_week1_summary <- function(k_wow_feature_base) {
   load_model_core_packages()
-  
+
   season_summary <- k_wow_feature_base |>
     dplyr::mutate(
       player_key = as.character(.data$player_key),
@@ -5926,7 +5927,7 @@ build_k_prior_season_week1_summary <- function(k_wow_feature_base) {
       season_long_att_pg = safe_div(.data$season_long_att, .data$season_games),
       season_long_made_pg = safe_div(.data$season_long_made, .data$season_games)
     )
-  
+
   prior_summary <- season_summary |>
     dplyr::transmute(
       player_key = .data$player_key,
@@ -5941,17 +5942,17 @@ build_k_prior_season_week1_summary <- function(k_wow_feature_base) {
       prior_season_long_att_pg = .data$season_long_att_pg,
       prior_season_long_made_pg = .data$season_long_made_pg
     )
-  
+
   target_rows <- season_summary |>
     dplyr::distinct(.data$player_key, .data$season)
-  
+
   career_summary <- lapply(seq_len(nrow(target_rows)), function(i) {
     player_key_i <- target_rows$player_key[[i]]
     season_i <- target_rows$season[[i]]
-    
+
     hist <- season_summary |>
       dplyr::filter(.data$player_key == player_key_i, .data$season < season_i, .data$season_games > 0)
-    
+
     if (nrow(hist) == 0) {
       return(data.frame(
         player_key = player_key_i,
@@ -5971,7 +5972,7 @@ build_k_prior_season_week1_summary <- function(k_wow_feature_base) {
         stringsAsFactors = FALSE
       ))
     }
-    
+
     total_games <- sum(hist$season_games, na.rm = TRUE)
     total_fp <- sum(hist$season_total_fp, na.rm = TRUE)
     total_fga <- sum(hist$season_fga, na.rm = TRUE)
@@ -5981,7 +5982,7 @@ build_k_prior_season_week1_summary <- function(k_wow_feature_base) {
     total_long_att <- sum(hist$season_long_att, na.rm = TRUE)
     total_long_made <- sum(hist$season_long_made, na.rm = TRUE)
     last_active <- max(hist$season, na.rm = TRUE)
-    
+
     data.frame(
       player_key = player_key_i,
       season = season_i,
@@ -6001,7 +6002,7 @@ build_k_prior_season_week1_summary <- function(k_wow_feature_base) {
     )
   }) |>
     dplyr::bind_rows()
-  
+
   target_rows |>
     dplyr::left_join(prior_summary, by = c("player_key", "season")) |>
     dplyr::left_join(career_summary, by = c("player_key", "season"))
@@ -6009,7 +6010,7 @@ build_k_prior_season_week1_summary <- function(k_wow_feature_base) {
 
 build_k_wow_defense_context <- function(k_wow_feature_base) {
   load_model_core_packages()
-  
+
   k_wow_feature_base |>
     dplyr::group_by(feature_week = .data$week, season = .data$season, defense_team = .data$opponent) |>
     dplyr::summarise(
@@ -6033,15 +6034,15 @@ build_k_wow_defense_context <- function(k_wow_feature_base) {
 
 build_k_wow_feature_overlay_table <- function(k_wow_feature_base = NULL, write_output = TRUE, output_dir = model_paths$wow_output_dir) {
   load_model_core_packages()
-  
+
   if (is.null(k_wow_feature_base)) {
     k_wow_feature_base <- build_k_weekly_feature_base(write_output = FALSE)
   }
-  
+
   k_prior_season_summary <- build_k_prior_season_week1_summary(k_wow_feature_base)
   k_defense_context <- build_k_wow_defense_context(k_wow_feature_base)
   k_sos_prior_reference <- build_k_sos_prior_reference()
-  
+
   out <- k_wow_feature_base |>
     dplyr::left_join(k_prior_season_summary, by = c("player_key", "season")) |>
     dplyr::left_join(k_defense_context, by = c("season", "feature_week", "next_week_opponent" = "defense_team")) |>
@@ -6269,11 +6270,11 @@ build_k_wow_feature_overlay_table <- function(k_wow_feature_base = NULL, write_o
         0.04 * .data$matchup_ease_component_0to100 +
         0.02 * .data$availability_component_0to100,
       k_in_season_omfg_score = pmin(100, pmax(0,
-                                              dplyr::if_else(
-                                                .data$week == 1L,
-                                                .data$preseason_anchor_score,
-                                                .data$preseason_weight * .data$preseason_anchor_score + (1 - .data$preseason_weight) * .data$inseason_omfg_component
-                                              )
+        dplyr::if_else(
+          .data$week == 1L,
+          .data$preseason_anchor_score,
+          .data$preseason_weight * .data$preseason_anchor_score + (1 - .data$preseason_weight) * .data$inseason_omfg_component
+        )
       )),
       k_anchor_board_score = qb_wow_row_mean(
         .data$k_sos_prior_component_0to100,
@@ -6282,23 +6283,23 @@ build_k_wow_feature_overlay_table <- function(k_wow_feature_base = NULL, write_o
         .data$wow_anchor_rank_component
       ),
       role_modifier = pmin(1.15, pmax(0.85,
-                                      1 +
-                                        k_wow_centered_rank(.data$availability_component_0to100) * 0.06 +
-                                        k_wow_centered_rank(.data$ceiling_opportunity_component_0to100) * 0.04
+        1 +
+          k_wow_centered_rank(.data$availability_component_0to100) * 0.06 +
+          k_wow_centered_rank(.data$ceiling_opportunity_component_0to100) * 0.04
       )),
       scoring_environment_modifier = pmin(1.12, pmax(0.88,
-                                                     1 +
-                                                       k_wow_centered_rank(.data$scoring_environment_component_0to100) * 0.08 +
-                                                       k_wow_centered_rank(.data$market_environment_component_0to100) * 0.06
+        1 +
+          k_wow_centered_rank(.data$scoring_environment_component_0to100) * 0.08 +
+          k_wow_centered_rank(.data$market_environment_component_0to100) * 0.06
       )),
       weather_modifier = pmin(1.10, pmax(0.90,
-                                         1 +
-                                           k_wow_centered_rank(.data$weather_venue_component_0to100) * 0.10
+        1 +
+          k_wow_centered_rank(.data$weather_venue_component_0to100) * 0.10
       )),
       matchup_modifier = pmin(1.08, pmax(0.92,
-                                         1 +
-                                           k_wow_centered_rank(.data$matchup_ease_component_0to100) * 0.08 +
-                                           k_wow_centered_rank(.data$spread_context_score) * 0.04
+        1 +
+          k_wow_centered_rank(.data$matchup_ease_component_0to100) * 0.08 +
+          k_wow_centered_rank(.data$spread_context_score) * 0.04
       )),
       player_expected_opportunity_fp = dplyr::coalesce(
         3.20 * dplyr::coalesce(.data$rolling3_fga, 0) +
@@ -6371,22 +6372,22 @@ build_k_wow_feature_overlay_table <- function(k_wow_feature_base = NULL, write_o
         0.25 * dplyr::coalesce(.data$scoring_environment_component_0to100, 0),
       k_weekly_board_score_legacy = (
         0.1742 * dplyr::coalesce(.data$weekly_projected_fp_rank_component, 0) +
-          0.1014 * dplyr::coalesce(.data$k_in_season_omfg_score, 0) +
-          0.2203 * dplyr::coalesce(.data$k_anchor_board_score, 0) +
-          0.1442 * dplyr::coalesce(.data$production_component_0to100, 0) +
-          0.3348 * dplyr::coalesce(.data$xpa_sd_rank_component, 0) +
-          0.0101 * dplyr::coalesce(.data$xpm_rank_component, 0) +
-          0.0091 * dplyr::coalesce(.data$scoring_environment_component_0to100, 0) +
-          0.0060 * dplyr::coalesce(.data$volume_opportunity_component_0to100, 0)
+        0.1014 * dplyr::coalesce(.data$k_in_season_omfg_score, 0) +
+        0.2203 * dplyr::coalesce(.data$k_anchor_board_score, 0) +
+        0.1442 * dplyr::coalesce(.data$production_component_0to100, 0) +
+        0.3348 * dplyr::coalesce(.data$xpa_sd_rank_component, 0) +
+        0.0101 * dplyr::coalesce(.data$xpm_rank_component, 0) +
+        0.0091 * dplyr::coalesce(.data$scoring_environment_component_0to100, 0) +
+        0.0060 * dplyr::coalesce(.data$volume_opportunity_component_0to100, 0)
       ) / (
         0.1742 * as.numeric(is.finite(.data$weekly_projected_fp_rank_component)) +
-          0.1014 * as.numeric(is.finite(.data$k_in_season_omfg_score)) +
-          0.2203 * as.numeric(is.finite(.data$k_anchor_board_score)) +
-          0.1442 * as.numeric(is.finite(.data$production_component_0to100)) +
-          0.3348 * as.numeric(is.finite(.data$xpa_sd_rank_component)) +
-          0.0101 * as.numeric(is.finite(.data$xpm_rank_component)) +
-          0.0091 * as.numeric(is.finite(.data$scoring_environment_component_0to100)) +
-          0.0060 * as.numeric(is.finite(.data$volume_opportunity_component_0to100))
+        0.1014 * as.numeric(is.finite(.data$k_in_season_omfg_score)) +
+        0.2203 * as.numeric(is.finite(.data$k_anchor_board_score)) +
+        0.1442 * as.numeric(is.finite(.data$production_component_0to100)) +
+        0.3348 * as.numeric(is.finite(.data$xpa_sd_rank_component)) +
+        0.0101 * as.numeric(is.finite(.data$xpm_rank_component)) +
+        0.0091 * as.numeric(is.finite(.data$scoring_environment_component_0to100)) +
+        0.0060 * as.numeric(is.finite(.data$volume_opportunity_component_0to100))
       ),
       k_wow_weight_profile = "legacy_board_v1",
       k_weekly_board_score = .data$k_weekly_board_score_legacy,
@@ -6408,7 +6409,7 @@ build_k_wow_feature_overlay_table <- function(k_wow_feature_base = NULL, write_o
     ) |>
     dplyr::ungroup() |>
     dplyr::arrange(.data$season, .data$week, .data$k_wow_rank)
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -6418,13 +6419,13 @@ build_k_wow_feature_overlay_table <- function(k_wow_feature_base = NULL, write_o
       na = ""
     )
   }
-  
+
   out
 }
 
 build_k_wow_board_summary <- function(k_wow_board, write_output = TRUE) {
   load_model_core_packages()
-  
+
   week_metrics <- k_wow_board |>
     dplyr::group_by(.data$season, .data$week) |>
     dplyr::summarise(
@@ -6452,7 +6453,7 @@ build_k_wow_board_summary <- function(k_wow_board, write_output = TRUE) {
       is_scorable = as.integer(.data$n > 1 & is.finite(.data$spearman)),
       spearman_gain_vs_legacy = .data$spearman - .data$legacy_spearman
     )
-  
+
   summary_out <- week_metrics |>
     dplyr::group_by(.data$season) |>
     dplyr::summarise(
@@ -6495,12 +6496,12 @@ build_k_wow_board_summary <- function(k_wow_board, write_output = TRUE) {
       weeks_beating_legacy = sum(.data$spearman_gain_vs_legacy[.data$is_scorable == 1L] > 0, na.rm = TRUE),
       .groups = "drop"
     )
-  
+
   out <- list(
     summary = summary_out,
     week_metrics = week_metrics
   )
-  
+
   if (write_output) {
     dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -6516,13 +6517,13 @@ build_k_wow_board_summary <- function(k_wow_board, write_output = TRUE) {
       na = ""
     )
   }
-  
+
   out
 }
 
 build_k_wow_final_export <- function(k_wow_board, write_output = TRUE) {
   load_model_core_packages()
-  
+
   out <- k_wow_board |>
     dplyr::filter(is.finite(.data$k_wow_final_score)) |>
     dplyr::transmute(
@@ -6583,7 +6584,7 @@ build_k_wow_final_export <- function(k_wow_board, write_output = TRUE) {
       momentum_component_0to100 = .data$momentum_component_0to100
     ) |>
     dplyr::arrange(.data$season, .data$week, .data$rank)
-  
+
   if (write_output) {
     dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -6593,17 +6594,17 @@ build_k_wow_final_export <- function(k_wow_board, write_output = TRUE) {
       na = ""
     )
   }
-  
+
   out
 }
 
 run_k_wow_board_rebuild <- function(write_output = TRUE) {
   load_model_core_packages()
-  
+
   k_wow_board <- build_k_wow_feature_overlay_table(write_output = write_output)
   k_wow_board_summary <- build_k_wow_board_summary(k_wow_board, write_output = write_output)
   k_wow_final_export <- build_k_wow_final_export(k_wow_board, write_output = write_output)
-  
+
   list(
     board = k_wow_board,
     board_summary = k_wow_board_summary,
@@ -6649,11 +6650,11 @@ build_core_wow_lock_summary <- function(write_output = FALSE, output_dir = model
     ),
     stringsAsFactors = FALSE
   )
-  
+
   out$final_export_exists <- file.exists(out$final_export_path)
   out$board_summary_exists <- file.exists(out$board_summary_path)
   out$board_metrics_exists <- file.exists(out$board_metrics_path)
-  
+
   if (write_output) {
     utils::write.csv(
       out,
@@ -6662,7 +6663,7 @@ build_core_wow_lock_summary <- function(write_output = FALSE, output_dir = model
       na = ""
     )
   }
-  
+
   out
 }
 
@@ -6720,9 +6721,9 @@ build_core_wow_output_manifest <- function(write_output = FALSE, output_dir = mo
     ),
     stringsAsFactors = FALSE
   )
-  
+
   out$exists <- file.exists(out$output_path)
-  
+
   if (write_output) {
     utils::write.csv(
       out,
@@ -6731,7 +6732,7 @@ build_core_wow_output_manifest <- function(write_output = FALSE, output_dir = mo
       na = ""
     )
   }
-  
+
   out
 }
 
@@ -6826,7 +6827,7 @@ build_dst_wow_clean_weekly_master <- function(write_output = FALSE, output_dir =
   load_model_core_packages()
   raw <- load_all_positions_hybrid() |>
     dplyr::filter(as.character(.data$POS) == "DST")
-  
+
   out <- data.frame(
     season = as.integer(dst_wow_pick_num(raw, c("SEA", "season"))),
     week = as.integer(dst_wow_pick_num(raw, c("WK", "week"))),
@@ -6865,11 +6866,11 @@ build_dst_wow_clean_weekly_master <- function(write_output = FALSE, output_dir =
         2 * dplyr::coalesce(fumbles, 0) +
         2 * dplyr::coalesce(safeties, 0) +
         6 * (dplyr::coalesce(defensive_tds, 0) +
-               dplyr::coalesce(kicking_tds, 0) +
-               dplyr::coalesce(punting_tds, 0))
+          dplyr::coalesce(kicking_tds, 0) +
+          dplyr::coalesce(punting_tds, 0))
     ) |>
     dplyr::filter(season >= 2021, season <= 2025, !is.na(week), week <= 18, !is.na(team))
-  
+
   # Repair historical Cartesian products from non-unique opponent-kicker joins.
   dst_source_corrections <- data.frame(
     season = c(2021L, 2022L, 2024L, 2024L, 2025L),
@@ -6879,7 +6880,7 @@ build_dst_wow_clean_weekly_master <- function(write_output = FALSE, output_dir =
     corrected_dst_fantasy_points = c(-1, 3, 9, -1, 9),
     stringsAsFactors = FALSE
   )
-  
+
   out <- out |>
     dplyr::left_join(dst_source_corrections, by = c("season", "week", "team"), relationship = "many-to-one") |>
     dplyr::mutate(
@@ -6888,7 +6889,7 @@ build_dst_wow_clean_weekly_master <- function(write_output = FALSE, output_dir =
       dst_fantasy_points = dplyr::coalesce(.data$corrected_dst_fantasy_points, .data$dst_fantasy_points)
     ) |>
     dplyr::select(-corrected_points_allowed, -corrected_dst_fantasy_points)
-  
+
   conflict_columns <- c(
     "player", "opponent", "dst_fantasy_points", "sacks", "interceptions", "fumbles",
     "safeties", "defensive_tds", "kicking_tds", "punting_tds", "points_allowed",
@@ -6908,7 +6909,7 @@ build_dst_wow_clean_weekly_master <- function(write_output = FALSE, output_dir =
       call. = FALSE
     )
   }
-  
+
   out <- out |>
     dplyr::mutate(
       source_completeness = rowSums(!is.na(dplyr::pick(dplyr::all_of(conflict_columns))))
@@ -6916,14 +6917,14 @@ build_dst_wow_clean_weekly_master <- function(write_output = FALSE, output_dir =
     dplyr::arrange(season, week, team, dplyr::desc(source_completeness), player, opponent) |>
     dplyr::distinct(season, week, team, .keep_all = TRUE) |>
     dplyr::select(-source_completeness)
-  
+
   duplicate_keys <- out |>
     dplyr::count(season, week, team) |>
     dplyr::filter(n > 1)
   if (nrow(duplicate_keys) > 0) {
     stop("DST WOW clean weekly master contains duplicated team-week keys after cleanup.", call. = FALSE)
   }
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(out, file.path(output_dir, "dst_clean_weekly_master_2021_2025_regular.csv"), row.names = FALSE, na = "")
@@ -7006,7 +7007,7 @@ build_dst_wow_board_summary <- function(board, write_output = FALSE, output_dir 
       is_scorable = n > 0,
       .groups = "drop"
     )
-  
+
   summary <- week_metrics |>
     dplyr::filter(is_scorable, is.finite(spearman)) |>
     dplyr::group_by(season) |>
@@ -7025,7 +7026,7 @@ build_dst_wow_board_summary <- function(board, write_output = FALSE, output_dir 
       avg_spearman_gain_vs_legacy = mean(spearman_gain_vs_legacy, na.rm = TRUE),
       .groups = "drop"
     )
-  
+
   out <- list(summary = summary, week_metrics = week_metrics)
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -7052,14 +7053,14 @@ run_dst_wow_board_rebuild <- function(write_output = TRUE) {
       recent_opponent_points_scored_3, target_week_fp, is_scorable
     ) |>
     dplyr::arrange(season, predicts_week, rank)
-  
+
   if (write_output) {
     dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(weekly, file.path(model_paths$wow_output_dir, "dst_wow_weekly_base_2021_2025.csv"), row.names = FALSE, na = "")
     utils::write.csv(feature_base, file.path(model_paths$wow_output_dir, "dst_weekly_feature_base_2021_2025_regular.csv"), row.names = FALSE, na = "")
     utils::write.csv(final_export, file.path(model_paths$wow_output_dir, "dst_wow_final_export_2021_2025.csv"), row.names = FALSE, na = "")
   }
-  
+
   result <- list(
     weekly_base = weekly,
     feature_base = feature_base,
@@ -7104,7 +7105,7 @@ dst_wow_apply_weights <- function(df, weights) {
       rep(50, nrow(df))
     }
   }
-  
+
   as.numeric(
     weights[["recent_form"]] * component("recent_form_component_0to100") +
       weights[["playmaking"]] * component("playmaking_component_0to100") +
@@ -7149,7 +7150,7 @@ run_dst_wow_holdout_pipeline <- function(test_season = 2025L, write_output = TRU
   feature_base <- build_dst_wow_feature_base(weekly)
   candidates <- dst_wow_weight_candidates()
   metric_rows <- dst_wow_holdout_metric_rows(feature_base, candidates)
-  
+
   training_summary <- metric_rows |>
     dplyr::filter(season < test_season, is.finite(spearman)) |>
     dplyr::group_by(model) |>
@@ -7168,12 +7169,12 @@ run_dst_wow_holdout_pipeline <- function(test_season = 2025L, write_output = TRU
       .groups = "drop"
     ) |>
     dplyr::arrange(dplyr::desc(avg_spearman), dplyr::desc(avg_spearman_gain_vs_legacy))
-  
+
   production_candidate <- training_summary$model[[1]]
   test_metrics <- metric_rows |>
     dplyr::filter(season == test_season) |>
     dplyr::arrange(model, predicts_week)
-  
+
   test_summary <- test_metrics |>
     dplyr::filter(is.finite(spearman)) |>
     dplyr::group_by(model) |>
@@ -7192,7 +7193,7 @@ run_dst_wow_holdout_pipeline <- function(test_season = 2025L, write_output = TRU
       .groups = "drop"
     ) |>
     dplyr::arrange(dplyr::desc(avg_spearman))
-  
+
   holdout_board <- feature_base |>
     dplyr::filter(season == test_season)
   holdout_board$dst_wow_holdout_weight_profile <- production_candidate
@@ -7212,7 +7213,7 @@ run_dst_wow_holdout_pipeline <- function(test_season = 2025L, write_output = TRU
       )
     ) |>
     dplyr::ungroup()
-  
+
   final_export <- holdout_board |>
     dplyr::select(
       season, feature_week, predicts_week,
@@ -7225,7 +7226,7 @@ run_dst_wow_holdout_pipeline <- function(test_season = 2025L, write_output = TRU
       target_week_fp, is_scorable
     ) |>
     dplyr::arrange(season, predicts_week, dst_wow_holdout_rank)
-  
+
   if (write_output) {
     dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -7253,7 +7254,7 @@ run_dst_wow_holdout_pipeline <- function(test_season = 2025L, write_output = TRU
       na = ""
     )
   }
-  
+
   result <- list(
     dst_wow_holdout_weekly_base = weekly,
     dst_wow_holdout_feature_base = feature_base,
@@ -7268,15 +7269,15 @@ run_dst_wow_holdout_pipeline <- function(test_season = 2025L, write_output = TRU
 }
 
 run_dst_wow_walk_forward_pipeline <- function(
-    test_seasons = c(2022L, 2023L, 2024L, 2025L),
-    write_output = TRUE
+  test_seasons = c(2022L, 2023L, 2024L, 2025L),
+  write_output = TRUE
 ) {
   load_model_core_packages()
   weekly <- build_dst_wow_clean_weekly_master(write_output = write_output)
   feature_base <- build_dst_wow_feature_base(weekly)
   candidates <- dst_wow_weight_candidates()
   test_seasons <- sort(unique(as.integer(test_seasons)))
-  
+
   metric_rows <- dst_wow_holdout_metric_rows(feature_base, candidates)
   safe_mean <- function(x) {
     if (any(is.finite(x))) mean(x, na.rm = TRUE) else NA_real_
@@ -7284,12 +7285,12 @@ run_dst_wow_walk_forward_pipeline <- function(
   safe_min <- function(x) {
     if (any(is.finite(x))) min(x, na.rm = TRUE) else NA_real_
   }
-  
+
   fold_tuning <- list()
   fold_summary <- list()
   fold_test_metrics <- list()
   fold_boards <- list()
-  
+
   for (test_season in test_seasons) {
     training_summary <- metric_rows |>
       dplyr::filter(season < test_season, is.finite(spearman)) |>
@@ -7310,7 +7311,7 @@ run_dst_wow_walk_forward_pipeline <- function(
       ) |>
       dplyr::mutate(test_season = test_season, .before = 1) |>
       dplyr::arrange(dplyr::desc(avg_spearman), dplyr::desc(avg_spearman_gain_vs_legacy))
-    
+
     production_candidate <- training_summary$model[[1]]
     test_metrics <- metric_rows |>
       dplyr::filter(season == test_season) |>
@@ -7322,7 +7323,7 @@ run_dst_wow_walk_forward_pipeline <- function(
       )
     selected_test_metrics <- test_metrics |>
       dplyr::filter(selected_model, is.finite(spearman))
-    
+
     fold_tuning[[as.character(test_season)]] <- training_summary
     fold_test_metrics[[as.character(test_season)]] <- test_metrics
     fold_summary[[as.character(test_season)]] <- data.frame(
@@ -7338,7 +7339,7 @@ run_dst_wow_walk_forward_pipeline <- function(
       avg_spearman_gain_vs_legacy = safe_mean(selected_test_metrics$spearman_gain_vs_legacy),
       stringsAsFactors = FALSE
     )
-    
+
     board <- feature_base |>
       dplyr::filter(season == test_season)
     board$dst_wow_walk_forward_weight_profile <- production_candidate
@@ -7361,12 +7362,12 @@ run_dst_wow_walk_forward_pipeline <- function(
       dplyr::arrange(season, predicts_week, dst_wow_walk_forward_rank)
     fold_boards[[as.character(test_season)]] <- board
   }
-  
+
   walk_forward_tuning <- dplyr::bind_rows(fold_tuning)
   walk_forward_summary <- dplyr::bind_rows(fold_summary)
   walk_forward_test_metrics <- dplyr::bind_rows(fold_test_metrics)
   walk_forward_final_export <- dplyr::bind_rows(fold_boards)
-  
+
   if (write_output) {
     dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -7394,7 +7395,7 @@ run_dst_wow_walk_forward_pipeline <- function(
       na = ""
     )
   }
-  
+
   result <- list(
     dst_wow_walk_forward_weekly_base = weekly,
     dst_wow_walk_forward_feature_base = feature_base,
@@ -7408,25 +7409,25 @@ run_dst_wow_walk_forward_pipeline <- function(
 }
 
 run_core_wow_partial_season_audit <- function(
-    season = 2025L,
-    cutoffs = c(1L, 2L, 4L, 8L),
-    write_output = TRUE
+  season = 2025L,
+  cutoffs = c(1L, 2L, 4L, 8L),
+  write_output = TRUE
 ) {
   load_model_core_packages()
-  
+
   original_loader <- get("load_all_positions_hybrid", envir = .GlobalEnv)
   on.exit(
     assign("load_all_positions_hybrid", original_loader, envir = .GlobalEnv),
     add = TRUE
   )
-  
+
   raw_full <- original_loader(model_paths$all_positions_hybrid_csv)
   season_col <- if ("SEA" %in% names(raw_full)) "SEA" else "season"
   week_col <- if ("WK" %in% names(raw_full)) "WK" else "week"
   if (!all(c(season_col, week_col) %in% names(raw_full))) {
     stop("The hybrid source is missing season/week columns needed for the partial-season audit.", call. = FALSE)
   }
-  
+
   runner_list <- list(
     QB = function() run_qb_wow_board_rebuild(write_output = FALSE),
     RB = function() run_rb_wow_board_rebuild(write_output = FALSE),
@@ -7435,15 +7436,15 @@ run_core_wow_partial_season_audit <- function(
     K = function() run_k_wow_board_rebuild(write_output = FALSE),
     DST = function() run_dst_wow_board_rebuild(write_output = FALSE)
   )
-  
+
   safe_max <- function(x) {
     x <- suppressWarnings(as.numeric(x))
     if (any(is.finite(x))) max(x, na.rm = TRUE) else NA_real_
   }
-  
+
   audit_rows <- list()
   cutoffs <- sort(unique(as.integer(cutoffs)))
-  
+
   for (cutoff in cutoffs) {
     raw_cutoff <- raw_full |>
       dplyr::filter(
@@ -7451,7 +7452,7 @@ run_core_wow_partial_season_audit <- function(
           is.na(suppressWarnings(as.integer(.data[[week_col]]))) |
           suppressWarnings(as.integer(.data[[week_col]])) <= cutoff
       )
-    
+
     assign(
       "load_all_positions_hybrid",
       (function(raw_value) {
@@ -7459,17 +7460,17 @@ run_core_wow_partial_season_audit <- function(
       })(raw_cutoff),
       envir = .GlobalEnv
     )
-    
+
     input_season_values <- suppressWarnings(as.integer(raw_cutoff[[season_col]]))
     input_week_values <- suppressWarnings(as.integer(raw_cutoff[[week_col]]))
     input_2025 <- input_week_values[input_season_values == season]
-    
+
     for (position in names(runner_list)) {
       result <- tryCatch(
         runner_list[[position]](),
         error = function(e) e
       )
-      
+
       if (inherits(result, "error")) {
         audit_rows[[length(audit_rows) + 1L]] <- data.frame(
           season = season,
@@ -7489,7 +7490,7 @@ run_core_wow_partial_season_audit <- function(
         )
         next
       }
-      
+
       board <- result$board
       if (is.null(board) || !is.data.frame(board) || !"season" %in% names(board)) {
         audit_rows[[length(audit_rows) + 1L]] <- data.frame(
@@ -7510,7 +7511,7 @@ run_core_wow_partial_season_audit <- function(
         )
         next
       }
-      
+
       board_seasons <- suppressWarnings(as.integer(board$season))
       board_2025 <- board[board_seasons == season, , drop = FALSE]
       feature_col <- if ("feature_week" %in% names(board_2025)) "feature_week" else "week"
@@ -7524,23 +7525,23 @@ run_core_wow_partial_season_audit <- function(
       } else {
         rep(NA_real_, nrow(board_2025))
       }
-      
+
       key_cols <- intersect(c("season", feature_col, "player", "team"), names(board_2025))
       duplicate_keys <- NA_integer_
       if (length(key_cols) >= 4L && nrow(board_2025) > 0L) {
         key_values <- apply(board_2025[key_cols], 1, paste, collapse = "\r")
         duplicate_keys <- sum(duplicated(key_values))
       }
-      
+
       future_feature_rows <- sum(is.finite(feature_values) & feature_values > cutoff)
       future_prediction_rows <- sum(is.finite(predicts_values) & predicts_values > cutoff + 1L)
       status <- if (
         nrow(board_2025) > 0L &&
-        safe_max(input_2025) <= cutoff &&
-        future_feature_rows == 0L &&
-        future_prediction_rows == 0L
+          safe_max(input_2025) <= cutoff &&
+          future_feature_rows == 0L &&
+          future_prediction_rows == 0L
       ) "PASS" else "FAIL"
-      
+
       audit_rows[[length(audit_rows) + 1L]] <- data.frame(
         season = season,
         cutoff_week = cutoff,
@@ -7559,7 +7560,7 @@ run_core_wow_partial_season_audit <- function(
       )
     }
   }
-  
+
   audit <- dplyr::bind_rows(audit_rows) |>
     dplyr::arrange(cutoff_week, position)
   summary <- audit |>
@@ -7572,7 +7573,7 @@ run_core_wow_partial_season_audit <- function(
       .groups = "drop"
     ) |>
     dplyr::arrange(cutoff_week)
-  
+
   if (write_output) {
     dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -7588,7 +7589,7 @@ run_core_wow_partial_season_audit <- function(
       na = ""
     )
   }
-  
+
   result <- list(
     audit = audit,
     summary = summary,
@@ -7602,11 +7603,11 @@ run_core_wow_partial_season_audit <- function(
 # Strict 2025 WOW review. The position board rebuilds are chronological by
 # design; DST additionally selects its candidate using only pre-2025 weeks.
 run_core_wow_walk_forward_2025 <- function(
-    test_season = 2025L,
-    write_output = TRUE
+  test_season = 2025L,
+  write_output = TRUE
 ) {
   load_model_core_packages()
-  
+
   test_season <- as.integer(test_season[[1]])
   position_specs <- list(
     QB = run_qb_wow_board_rebuild,
@@ -7615,17 +7616,17 @@ run_core_wow_walk_forward_2025 <- function(
     TE = run_te_wow_board_rebuild,
     K = run_k_wow_board_rebuild
   )
-  
+
   summary_rows <- list()
   week_rows <- list()
   selected_exports <- list()
-  
+
   for (position in names(position_specs)) {
     rebuilt <- position_specs[[position]](write_output = FALSE)
     summary_raw <- rebuilt$board_summary$summary |>
       dplyr::filter(.data$season == .env$test_season) |>
       dplyr::slice(1)
-    
+
     summary_rows[[position]] <- data.frame(
       position = position,
       season = test_season,
@@ -7644,7 +7645,7 @@ run_core_wow_walk_forward_2025 <- function(
       avg_spearman_gain_vs_legacy = NA_real_,
       stringsAsFactors = FALSE
     )
-    
+
     week_raw <- rebuilt$board_summary$week_metrics |>
       dplyr::filter(.data$season == .env$test_season)
     if (!"feature_week" %in% names(week_raw)) {
@@ -7669,7 +7670,7 @@ run_core_wow_walk_forward_2025 <- function(
         selected_model = "board_rebuild_current",
         selection_rule = "fixed_chronological_board_logic"
       )
-    
+
     selected_exports[[position]] <- rebuilt$final_export |>
       dplyr::filter(.data$season == .env$test_season) |>
       dplyr::mutate(
@@ -7679,7 +7680,7 @@ run_core_wow_walk_forward_2025 <- function(
         .before = 1
       )
   }
-  
+
   dst_holdout <- run_dst_wow_holdout_pipeline(
     test_season = test_season,
     write_output = write_output
@@ -7688,7 +7689,7 @@ run_core_wow_walk_forward_2025 <- function(
   dst_summary <- dst_holdout$dst_wow_holdout_test_summary |>
     dplyr::filter(.data$model == .env$dst_selected_model) |>
     dplyr::slice(1)
-  
+
   summary_rows[["DST"]] <- data.frame(
     position = "DST",
     season = test_season,
@@ -7707,7 +7708,7 @@ run_core_wow_walk_forward_2025 <- function(
     avg_spearman_gain_vs_legacy = dst_summary$avg_spearman_gain_vs_legacy[[1]],
     stringsAsFactors = FALSE
   )
-  
+
   dst_week_raw <- dst_holdout$dst_wow_holdout_test_metrics |>
     dplyr::filter(.data$model == .env$dst_selected_model)
   week_rows[["DST"]] <- dst_week_raw |>
@@ -7730,13 +7731,13 @@ run_core_wow_walk_forward_2025 <- function(
       selection_rule = paste0("trained_through_", .env$test_season - 1L),
       .before = 1
     )
-  
+
   summary <- dplyr::bind_rows(summary_rows) |>
     dplyr::arrange(.data$position)
   week_metrics <- dplyr::bind_rows(week_rows) |>
     dplyr::arrange(.data$position, .data$feature_week)
   selected_export <- dplyr::bind_rows(selected_exports)
-  
+
   if (write_output) {
     dir.create(model_paths$wow_output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -7758,7 +7759,7 @@ run_core_wow_walk_forward_2025 <- function(
       na = ""
     )
   }
-  
+
   result <- list(
     summary = summary,
     week_metrics = week_metrics,
@@ -7821,8 +7822,33 @@ wow_prob_targets <- function(position) {
     RB = c(top6 = 6L, top12 = 12L, top24 = 24L, top36 = 36L),
     WR = c(top12 = 12L, top24 = 24L, top36 = 36L, top48 = 48L),
     TE = c(top5 = 5L, top12 = 12L, top18 = 18L, top24 = 24L),
+    K = c(top6 = 6L, top12 = 12L, top18 = 18L, top24 = 24L),
+    DST = c(top6 = 6L, top12 = 12L, top18 = 18L, top24 = 24L),
     c(top12 = 12L)
   )
+}
+
+wow_standardize_probability_input <- function(df, position) {
+  position <- toupper(position)
+  if (!is.data.frame(df)) stop("WOW probability input must be a data frame.", call. = FALSE)
+
+  if (position == "DST") {
+    aliases <- list(
+      week = "feature_week",
+      final_score = "dst_weekly_board_score",
+      weekly_board_score = "dst_weekly_board_score",
+      actual_week_fp = "target_week_fp"
+    )
+    for (target in names(aliases)) {
+      if (target %in% names(df)) next
+      source <- aliases[[target]][aliases[[target]] %in% names(df)][1]
+      if (length(source) == 1L && !is.na(source)) df[[target]] <- df[[source]]
+    }
+  }
+
+  if (!"in_season_omfg" %in% names(df)) df$in_season_omfg <- NA_real_
+  if (!"weekly_board_score" %in% names(df)) df$weekly_board_score <- df$final_score
+  df
 }
 
 wow_prob_fit_predict <- function(df, target_col) {
@@ -7857,8 +7883,9 @@ build_position_wow_tier_probabilities <- function(position, write_output = TRUE)
   position <- toupper(position)
   input_path <- file.path(model_paths$wow_output_dir, paste0(tolower(position), "_wow_final_export_2021_2025.csv"))
   if (!file.exists(input_path)) stop("Missing WOW final export: ", input_path, call. = FALSE)
-  
-  df <- utils::read.csv(input_path, stringsAsFactors = FALSE, check.names = FALSE)
+
+  df <- utils::read.csv(input_path, stringsAsFactors = FALSE, check.names = FALSE) |>
+    wow_standardize_probability_input(position)
   thresholds <- wow_prob_targets(position)
   calibration_profile <- if (position == "QB") {
     build_qb_wow_probability_calibration_profile(write_output = write_output)
@@ -7875,7 +7902,7 @@ build_position_wow_tier_probabilities <- function(position, write_output = TRUE)
   week_col <- if ("predicts_week" %in% names(df)) "predicts_week" else "week"
   in_season_omfg <- if ("in_season_omfg" %in% names(df)) wow_prob_num(df$in_season_omfg) else rep(NA_real_, nrow(df))
   weekly_board_score <- if ("weekly_board_score" %in% names(df)) wow_prob_num(df$weekly_board_score) else rep(NA_real_, nrow(df))
-  
+
   out <- df |>
     dplyr::mutate(
       position = position,
@@ -7904,7 +7931,7 @@ build_position_wow_tier_probabilities <- function(position, write_output = TRUE)
       omfg_score_z = wow_prob_z(.data$in_season_omfg),
       board_score_z = wow_prob_z(.data$weekly_board_score)
     )
-  
+
   for (target_name in names(thresholds)) {
     cutoff <- thresholds[[target_name]]
     outcome_col <- paste0("actual_week_", target_name)
@@ -7922,7 +7949,13 @@ build_position_wow_tier_probabilities <- function(position, write_output = TRUE)
       out[[prob_col]] <- raw_probability
     }
   }
-  
+
+  ordered_targets <- names(thresholds)[order(as.integer(thresholds))]
+  out <- wow_prob_enforce_nested(
+    out,
+    paste0("prob_week_", ordered_targets)
+  )
+
   probability_cols <- grep("^prob_week_", names(out), value = TRUE)
   raw_probability_cols <- grep("^raw_prob_week_", names(out), value = TRUE)
   keep_cols <- unique(c(
@@ -7935,7 +7968,7 @@ build_position_wow_tier_probabilities <- function(position, write_output = TRUE)
   export <- out |>
     dplyr::select(dplyr::all_of(keep_cols)) |>
     dplyr::arrange(.data$season, .data[[week_col]], .data$rank)
-  
+
   summary_rows <- list()
   idx <- 1L
   for (target_name in names(thresholds)) {
@@ -7962,7 +7995,7 @@ build_position_wow_tier_probabilities <- function(position, write_output = TRUE)
     idx <- idx + 1L
   }
   summary <- dplyr::bind_rows(summary_rows)
-  
+
   if (write_output) {
     output_dir <- wow_probability_output_dir()
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -7972,7 +8005,7 @@ build_position_wow_tier_probabilities <- function(position, write_output = TRUE)
   list(export = export, summary = summary)
 }
 
-build_core_wow_tier_probabilities <- function(positions = c("QB", "RB", "WR", "TE"), write_output = TRUE) {
+build_core_wow_tier_probabilities <- function(positions = c("QB", "RB", "WR", "TE", "K", "DST"), write_output = TRUE) {
   load_model_core_packages()
   results <- lapply(positions, build_position_wow_tier_probabilities, write_output = write_output)
   names(results) <- positions
@@ -7988,14 +8021,14 @@ build_core_wow_tier_probabilities <- function(positions = c("QB", "RB", "WR", "T
 }
 
 build_core_wow_probability_lift_audit <- function(
-    positions = c("QB", "RB", "WR", "TE"),
-    write_output = TRUE
+  positions = c("QB", "RB", "WR", "TE", "K", "DST"),
+  write_output = TRUE
 ) {
   load_model_core_packages()
   output_dir <- wow_probability_output_dir()
   audit_rows <- list()
   idx <- 1L
-  
+
   for (position in toupper(positions)) {
     input_path <- file.path(output_dir, paste0(tolower(position), "_wow_tier_probability_export_2021_2025.csv"))
     if (!file.exists(input_path)) {
@@ -8003,11 +8036,11 @@ build_core_wow_probability_lift_audit <- function(
     }
     df <- utils::read.csv(input_path, stringsAsFactors = FALSE, check.names = FALSE)
     probability_cols <- grep("^prob_week_top[0-9]+$", names(df), value = TRUE)
-    
+
     for (prob_col in probability_cols) {
       cutoff <- suppressWarnings(as.integer(sub(".*_top", "", prob_col)))
       if (!"actual_week_rank" %in% names(df) || !is.finite(cutoff)) next
-      
+
       tmp <- data.frame(
         probability = wow_prob_num(df[[prob_col]]),
         actual_rank = wow_prob_num(df$actual_week_rank)
@@ -8018,7 +8051,7 @@ build_core_wow_probability_lift_audit <- function(
       tmp$probability_decile <- dplyr::ntile(tmp$probability, 10)
       base_rate <- mean(tmp$actual_hit, na.rm = TRUE)
       target_label <- sub("^prob_", "", prob_col)
-      
+
       audit <- tmp |>
         dplyr::group_by(.data$probability_decile) |>
         dplyr::summarise(
@@ -8040,10 +8073,10 @@ build_core_wow_probability_lift_audit <- function(
       idx <- idx + 1L
     }
   }
-  
+
   out <- dplyr::bind_rows(audit_rows) |>
     dplyr::arrange(.data$position, .data$target, .data$probability_decile)
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(
@@ -8063,7 +8096,7 @@ wow_prob_walk_forward_fit <- function(train_df, test_df, outcome_col) {
   keep <- !is.na(target)
   train_base_rate <- mean(target[keep], na.rm = TRUE)
   if (!is.finite(train_base_rate)) train_base_rate <- 0
-  
+
   if (sum(keep) < 25 || length(unique(target[keep])) < 2) {
     return(list(
       probability = wow_prob_clamp(rep(train_base_rate, nrow(test_df))),
@@ -8072,7 +8105,7 @@ wow_prob_walk_forward_fit <- function(train_df, test_df, outcome_col) {
       train_base_rate = train_base_rate
     ))
   }
-  
+
   train_model <- data.frame(target_outcome = target[keep])
   test_model <- data.frame(row_id = seq_len(nrow(test_df)))
   z_cols <- character()
@@ -8090,7 +8123,7 @@ wow_prob_walk_forward_fit <- function(train_df, test_df, outcome_col) {
     test_model[[z_col]][!is.finite(test_model[[z_col]])] <- 0
     z_cols <- c(z_cols, z_col)
   }
-  
+
   fit <- try(
     suppressWarnings(stats::glm(
       stats::reformulate(z_cols, response = "target_outcome"),
@@ -8107,7 +8140,7 @@ wow_prob_walk_forward_fit <- function(train_df, test_df, outcome_col) {
       train_base_rate = train_base_rate
     ))
   }
-  
+
   probability <- try(
     suppressWarnings(stats::predict(fit, newdata = test_model, type = "response")),
     silent = TRUE
@@ -8160,9 +8193,9 @@ wow_prob_calibration_stats <- function(actual, probability) {
 }
 
 run_position_wow_probability_walk_forward <- function(
-    position,
-    test_seasons = NULL,
-    write_output = TRUE
+  position,
+  test_seasons = NULL,
+  write_output = TRUE
 ) {
   load_model_core_packages()
   position_label <- toupper(position)
@@ -8171,8 +8204,9 @@ run_position_wow_probability_walk_forward <- function(
     paste0(tolower(position_label), "_wow_final_export_2021_2025.csv")
   )
   if (!file.exists(input_path)) stop("Missing WOW final export: ", input_path, call. = FALSE)
-  
-  df <- utils::read.csv(input_path, stringsAsFactors = FALSE, check.names = FALSE)
+
+  df <- utils::read.csv(input_path, stringsAsFactors = FALSE, check.names = FALSE) |>
+    wow_standardize_probability_input(position_label)
   thresholds <- wow_prob_targets(position_label)
   actual_col <- if ("actual_next_week_fp" %in% names(df)) {
     "actual_next_week_fp"
@@ -8205,14 +8239,14 @@ run_position_wow_probability_walk_forward <- function(
     ) |>
     dplyr::ungroup() |>
     dplyr::mutate(rank_score_0to100 = wow_prob_rank_score(.data$rank, .data$field_size))
-  
+
   for (target_name in names(thresholds)) {
     cutoff <- thresholds[[target_name]]
     frame[[paste0("actual_week_", target_name)]] <- ifelse(
       is.finite(frame$actual_week_rank), as.integer(frame$actual_week_rank <= cutoff), NA_integer_
     )
   }
-  
+
   available_seasons <- sort(unique(frame$season[is.finite(frame$season)]))
   eligible_test_seasons <- available_seasons[available_seasons > min(available_seasons)]
   if (!is.null(test_seasons)) {
@@ -8220,13 +8254,13 @@ run_position_wow_probability_walk_forward <- function(
   }
   prediction_rows <- list()
   idx <- 1L
-  
+
   for (test_season in eligible_test_seasons) {
-    train <- frame[frame$season < test_season, , drop = FALSE]
-    test <- frame[frame$season == test_season, , drop = FALSE]
+    train <- frame[!is.na(frame$season) & frame$season < test_season, , drop = FALSE]
+    test <- frame[!is.na(frame$season) & frame$season == test_season, , drop = FALSE]
     train_seasons_label <- paste(sort(unique(train$season)), collapse = ",")
     if (nrow(train) == 0 || nrow(test) == 0) next
-    
+
     for (target_name in names(thresholds)) {
       cutoff <- thresholds[[target_name]]
       outcome_col <- paste0("actual_week_", target_name)
@@ -8257,12 +8291,12 @@ run_position_wow_probability_walk_forward <- function(
       idx <- idx + 1L
     }
   }
-  
+
   predictions <- dplyr::bind_rows(prediction_rows) |>
     dplyr::filter(!is.na(.data$actual_hit), is.finite(.data$probability)) |>
     dplyr::arrange(.data$test_season, .data$target, dplyr::desc(.data$probability))
   if (nrow(predictions) == 0) stop("No WOW walk-forward probability rows were produced for ", position_label, call. = FALSE)
-  
+
   metric_groups <- split(
     predictions,
     interaction(predictions$test_season, predictions$target, drop = TRUE)
@@ -8303,7 +8337,7 @@ run_position_wow_probability_walk_forward <- function(
     )
   })) |>
     dplyr::arrange(.data$position, .data$target, .data$test_season)
-  
+
   deciles <- predictions |>
     dplyr::group_by(.data$test_season, .data$train_seasons, .data$target, .data$cutoff) |>
     dplyr::mutate(
@@ -8324,14 +8358,14 @@ run_position_wow_probability_walk_forward <- function(
       lift_vs_base = .data$actual_rate / .data$base_rate,
       .before = 1
     )
-  
+
   list(predictions = predictions, metrics = metrics, deciles = deciles)
 }
 
 run_core_wow_probability_walk_forward <- function(
-    positions = c("QB", "RB", "WR", "TE"),
-    test_seasons = NULL,
-    write_output = TRUE
+  positions = c("QB", "RB", "WR", "TE", "K", "DST"),
+  test_seasons = NULL,
+  write_output = TRUE
 ) {
   load_model_core_packages()
   positions <- toupper(positions)
@@ -8345,7 +8379,7 @@ run_core_wow_probability_walk_forward <- function(
   predictions <- dplyr::bind_rows(lapply(results, `[[`, "predictions"))
   metrics <- dplyr::bind_rows(lapply(results, `[[`, "metrics"))
   deciles <- dplyr::bind_rows(lapply(results, `[[`, "deciles"))
-  
+
   pooled <- split(predictions, interaction(predictions$position, predictions$target, drop = TRUE))
   summary <- dplyr::bind_rows(lapply(pooled, function(x) {
     x$probability_decile <- dplyr::ntile(x$probability, 10)
@@ -8376,7 +8410,7 @@ run_core_wow_probability_walk_forward <- function(
     )
   })) |>
     dplyr::arrange(.data$position, .data$target)
-  
+
   if (write_output) {
     output_dir <- wow_probability_output_dir()
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -8394,9 +8428,9 @@ run_core_wow_probability_walk_forward <- function(
 }
 
 build_qb_wow_probability_calibration_profile <- function(
-    blend_weight = 0.50,
-    min_relative_gain = 0.001,
-    write_output = TRUE
+  blend_weight = 0.50,
+  min_relative_gain = 0.001,
+  write_output = TRUE
 ) {
   blend_weight <- max(0, min(1, as.numeric(blend_weight)))
   min_relative_gain <- max(0, as.numeric(min_relative_gain))
@@ -8407,13 +8441,13 @@ build_qb_wow_probability_calibration_profile <- function(
   predictions <- walk_forward$predictions
   profile_rows <- list()
   idx <- 1L
-  
+
   for (target_label in unique(predictions$target)) {
     target_rows <- predictions[predictions$target == target_label, , drop = FALSE]
     seasons <- sort(unique(target_rows$test_season))
     nested_rows <- list()
     nested_idx <- 1L
-    
+
     if (length(seasons) > 1) {
       for (test_season in seasons[-1]) {
         train <- target_rows[target_rows$test_season < test_season, , drop = FALSE]
@@ -8443,7 +8477,7 @@ build_qb_wow_probability_calibration_profile <- function(
         nested_idx <- nested_idx + 1L
       }
     }
-    
+
     nested <- dplyr::bind_rows(nested_rows)
     if (nrow(nested) > 0) {
       raw_brier <- mean((nested$raw_probability - nested$actual_hit)^2)
@@ -8459,7 +8493,7 @@ build_qb_wow_probability_calibration_profile <- function(
     } else {
       raw_brier <- adjusted_brier <- raw_log_loss <- adjusted_log_loss <- NA_real_
     }
-    
+
     full_logit <- stats::qlogis(wow_prob_clamp(target_rows$probability, 0.001, 0.999))
     final_fit <- try(
       suppressWarnings(stats::glm(target_rows$actual_hit ~ full_logit, family = stats::binomial())),
@@ -8475,7 +8509,7 @@ build_qb_wow_probability_calibration_profile <- function(
     adjustment_enabled <- is.finite(relative_brier_gain) && is.finite(relative_log_loss_gain) &&
       relative_brier_gain >= min_relative_gain && relative_log_loss_gain >= min_relative_gain &&
       is.finite(calibration_slope) && calibration_slope > 0
-    
+
     profile_rows[[idx]] <- data.frame(
       position = "QB",
       model_family = "WOW",
@@ -8501,7 +8535,7 @@ build_qb_wow_probability_calibration_profile <- function(
     )
     idx <- idx + 1L
   }
-  
+
   profile <- dplyr::bind_rows(profile_rows) |>
     dplyr::arrange(.data$target)
   if (write_output) {
@@ -8543,7 +8577,7 @@ wow_production_output_dir <- function() {
 
 wow_prob_enforce_nested <- function(df, probability_cols) {
   if (length(probability_cols) < 2L || nrow(df) == 0L) return(df)
-  
+
   adjusted <- t(apply(as.matrix(df[probability_cols]), 1L, function(values) {
     values <- wow_prob_num(values)
     if (all(!is.finite(values))) return(values)
@@ -8559,7 +8593,7 @@ wow_prob_enforce_nested <- function(df, probability_cols) {
 
 wow_prepare_probability_frame <- function(df, include_actual = TRUE) {
   if (nrow(df) == 0L) return(df)
-  
+
   actual_col <- if ("actual_next_week_fp" %in% names(df)) {
     "actual_next_week_fp"
   } else if ("actual_week_fp" %in% names(df)) {
@@ -8570,7 +8604,7 @@ wow_prepare_probability_frame <- function(df, include_actual = TRUE) {
   week_col <- if ("predicts_week" %in% names(df)) "predicts_week" else "week"
   in_season_omfg <- if ("in_season_omfg" %in% names(df)) wow_prob_num(df$in_season_omfg) else rep(NA_real_, nrow(df))
   weekly_board_score <- if ("weekly_board_score" %in% names(df)) wow_prob_num(df$weekly_board_score) else rep(NA_real_, nrow(df))
-  
+
   out <- df |>
     dplyr::mutate(
       season = suppressWarnings(as.integer(.data$season)),
@@ -8586,7 +8620,7 @@ wow_prepare_probability_frame <- function(df, include_actual = TRUE) {
       rank_score_0to100 = wow_prob_rank_score(.data$rank, .data$field_size)
     ) |>
     dplyr::ungroup()
-  
+
   if (isTRUE(include_actual)) {
     if (!is.character(actual_col) || is.na(actual_col)) {
       stop("No weekly actual fantasy column is available for probability training.", call. = FALSE)
@@ -8603,7 +8637,7 @@ wow_prepare_probability_frame <- function(df, include_actual = TRUE) {
       ) |>
       dplyr::ungroup()
   }
-  
+
   out
 }
 
@@ -8616,21 +8650,23 @@ build_position_wow_production_probabilities <- function(
 ) {
   load_model_core_packages()
   position <- toupper(position)
-  if (!position %in% c("QB", "RB", "WR", "TE")) return(production_rows)
+  if (!position %in% c("QB", "RB", "WR", "TE", "K", "DST")) return(production_rows)
   if (nrow(production_rows) == 0L) stop("No production rows supplied for ", position, call. = FALSE)
-  
+
   history_path <- file.path(
     model_paths$wow_output_dir,
     paste0(tolower(position), "_wow_final_export_2021_2025.csv")
   )
   if (!file.exists(history_path)) stop("Missing WOW probability history: ", history_path, call. = FALSE)
-  
+
   history <- utils::read.csv(history_path, stringsAsFactors = FALSE, check.names = FALSE) |>
+    wow_standardize_probability_input(position) |>
     dplyr::filter(suppressWarnings(as.integer(.data$season)) <= .env$history_end_season)
+  production_rows <- wow_standardize_probability_input(production_rows, position)
   train <- wow_prepare_probability_frame(history, include_actual = TRUE)
   test <- wow_prepare_probability_frame(production_rows, include_actual = FALSE)
   thresholds <- wow_prob_targets(position)
-  
+
   for (target_name in names(thresholds)) {
     cutoff <- thresholds[[target_name]]
     outcome_col <- paste0("actual_week_", target_name)
@@ -8640,7 +8676,7 @@ build_position_wow_production_probabilities <- function(
       NA_integer_
     )
   }
-  
+
   calibration_profile <- NULL
   if (position == "QB") {
     calibration_path <- file.path(wow_probability_output_dir(), "qb_wow_probability_calibration_profile.csv")
@@ -8648,7 +8684,7 @@ build_position_wow_production_probabilities <- function(
       calibration_profile <- utils::read.csv(calibration_path, stringsAsFactors = FALSE, check.names = FALSE)
     }
   }
-  
+
   probability_cols <- character()
   for (target_name in names(thresholds)) {
     outcome_col <- paste0("actual_week_", target_name)
@@ -8665,7 +8701,7 @@ build_position_wow_production_probabilities <- function(
     test[[probability_col]] <- probability
     probability_cols <- c(probability_cols, probability_col)
   }
-  
+
   ordered_targets <- names(sort(unlist(thresholds)))
   ordered_probability_cols <- paste0("prob_week_", ordered_targets)
   test <- wow_prob_enforce_nested(test, ordered_probability_cols)
@@ -8674,7 +8710,7 @@ build_position_wow_production_probabilities <- function(
       "probability_week", "field_size", "rank_score_0to100",
       "actual_week_fp_for_probability", "actual_week_rank"
     )))
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     prediction_season <- unique(as.integer(out$season))
@@ -8691,7 +8727,7 @@ build_position_wow_production_probabilities <- function(
       )
     }
   }
-  
+
   out
 }
 
@@ -8706,11 +8742,11 @@ wow_load_or_rebuild_position_export <- function(position, rebuild = TRUE) {
     DST = run_dst_wow_board_rebuild
   )
   if (!position %in% names(runners)) stop("Unsupported WOW production position: ", position, call. = FALSE)
-  
+
   if (isTRUE(rebuild)) {
     return(runners[[position]](write_output = FALSE)$final_export)
   }
-  
+
   path <- file.path(
     model_paths$wow_output_dir,
     paste0(tolower(position), "_wow_final_export_2021_2025.csv")
@@ -8722,7 +8758,7 @@ wow_load_or_rebuild_position_export <- function(position, rebuild = TRUE) {
 build_core_wow_production_audit <- function(master, prediction_season, feature_week) {
   load_model_core_packages()
   positions <- c("QB", "RB", "WR", "TE", "K", "DST")
-  
+
   dplyr::bind_rows(lapply(positions, function(position) {
     x <- master[master$position == position, , drop = FALSE]
     probability_cols <- grep("^prob_week_top[0-9]+$", names(x), value = TRUE)
@@ -8754,7 +8790,7 @@ build_core_wow_production_audit <- function(master, prediction_season, feature_w
     } else {
       0L
     }
-    
+
     checks <- c(
       nrow(x) > 0L,
       duplicate_keys == 0L,
@@ -8766,7 +8802,7 @@ build_core_wow_production_audit <- function(master, prediction_season, feature_w
       out_of_bounds == 0L,
       nested_violations == 0L
     )
-    
+
     data.frame(
       position = position,
       prediction_season = prediction_season,
@@ -8801,7 +8837,7 @@ run_core_wow_production <- function(
   if (!is.finite(prediction_season) || !is.finite(feature_week) || feature_week < 1L || feature_week > 18L) {
     stop("prediction_season and feature_week must identify a valid NFL feature snapshot.", call. = FALSE)
   }
-  
+
   results <- list()
   for (position in positions) {
     export <- if (!is.null(position_exports) && position %in% names(position_exports)) {
@@ -8834,27 +8870,21 @@ run_core_wow_production <- function(
     rows <- rows |>
       dplyr::mutate(
         position = .env$position,
-        production_mode = if (.env$position %in% c("QB", "RB", "WR", "TE")) {
-          "live_week_with_probabilities"
-        } else {
-          "live_week_rank_only"
-        },
+        production_mode = "live_week_with_probabilities",
         feature_week = .data$week,
         .before = 1
       )
-    if (position %in% c("QB", "RB", "WR", "TE")) {
-      rows <- build_position_wow_production_probabilities(
-        position = position,
-        production_rows = rows,
-        history_end_season = prediction_season - 1L,
-        write_output = FALSE,
-        output_dir = output_dir
-      )
-    }
+    rows <- build_position_wow_production_probabilities(
+      position = position,
+      production_rows = rows,
+      history_end_season = prediction_season - 1L,
+      write_output = FALSE,
+      output_dir = output_dir
+    )
     results[[position]] <- rows |>
       dplyr::arrange(.data$rank)
   }
-  
+
   master <- dplyr::bind_rows(results) |>
     dplyr::arrange(.data$position, .data$rank)
   audit <- build_core_wow_production_audit(master, prediction_season, feature_week)
@@ -8862,7 +8892,7 @@ run_core_wow_production <- function(
     failed <- paste(audit$position[audit$status != "PASS"], collapse = ", ")
     stop("WOW production audit failed for: ", failed, call. = FALSE)
   }
-  
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     predicts_week <- feature_week + 1L
@@ -8894,7 +8924,7 @@ run_core_wow_production <- function(
   } else {
     manifest <- data.frame()
   }
-  
+
   result <- list(
     prediction_season = prediction_season,
     feature_week = feature_week,
@@ -8932,7 +8962,7 @@ wow_read_week1_actuals <- function(position) {
   if (!all(c("season", "week", "player", spec$points) %in% names(raw))) {
     stop("Week 1 actual source has an unexpected schema: ", spec$path, call. = FALSE)
   }
-  
+
   raw |>
     dplyr::filter(suppressWarnings(as.integer(.data$week)) == 1L) |>
     dplyr::transmute(
@@ -8947,25 +8977,120 @@ wow_read_week1_actuals <- function(position) {
     )
 }
 
+wow_read_week1_schedule_history <- function(position) {
+  spec <- wow_week1_actual_source_spec(position)
+  raw <- utils::read.csv(spec$path, stringsAsFactors = FALSE, check.names = FALSE)
+  required <- c("season", "week", "team", "opponent")
+  if (!all(required %in% names(raw))) {
+    stop("Week 1 schedule source has an unexpected schema: ", spec$path, call. = FALSE)
+  }
+
+  raw |>
+    dplyr::filter(suppressWarnings(as.integer(.data$week)) == 1L) |>
+    dplyr::transmute(
+      season = suppressWarnings(as.integer(.data$season)),
+      team = normalize_team_abbr(.data$team),
+      opponent = normalize_team_abbr(.data$opponent)
+    ) |>
+    dplyr::filter(!is.na(.data$team), .data$team != "", !is.na(.data$opponent), .data$opponent != "") |>
+    dplyr::group_by(.data$season, .data$team) |>
+    dplyr::summarise(opponent = first_non_missing_character(.data$opponent), .groups = "drop")
+}
+
+wow_build_week1_matchup_context <- function(position) {
+  position <- toupper(position)
+  spec <- wow_week1_actual_source_spec(position)
+  raw <- utils::read.csv(spec$path, stringsAsFactors = FALSE, check.names = FALSE)
+  required <- c("season", "week", "player", "team", "opponent", spec$points)
+  if (!all(required %in% names(raw))) {
+    stop("Week 1 matchup source has an unexpected schema: ", spec$path, call. = FALSE)
+  }
+
+  player_week <- raw |>
+    dplyr::transmute(
+      season = suppressWarnings(as.integer(.data$season)),
+      week = suppressWarnings(as.integer(.data$week)),
+      player_key = make_player_key(.data$player),
+      team = normalize_team_abbr(.data$team),
+      opponent = normalize_team_abbr(.data$opponent),
+      fantasy_points = wow_prob_num(.data[[spec$points]])
+    ) |>
+    dplyr::filter(
+      is.finite(.data$season), is.finite(.data$week),
+      !is.na(.data$team), .data$team != "",
+      !is.na(.data$opponent), .data$opponent != ""
+    ) |>
+    dplyr::group_by(.data$season, .data$week, .data$player_key, .data$team, .data$opponent) |>
+    dplyr::summarise(
+      fantasy_points = if (any(is.finite(.data$fantasy_points))) max(.data$fantasy_points, na.rm = TRUE) else NA_real_,
+      .groups = "drop"
+    )
+
+  team_week <- player_week |>
+    dplyr::group_by(.data$season, .data$week, .data$team, .data$opponent) |>
+    dplyr::summarise(
+      position_fantasy_points = if (!any(is.finite(.data$fantasy_points))) {
+        NA_real_
+      } else if (.env$position %in% c("QB", "K", "DST")) {
+        max(.data$fantasy_points, na.rm = TRUE)
+      } else {
+        sum(.data$fantasy_points, na.rm = TRUE)
+      },
+      .groups = "drop"
+    )
+
+  opponent_season <- team_week |>
+    dplyr::group_by(.data$season, .data$opponent) |>
+    dplyr::summarise(
+      games = sum(is.finite(.data$position_fantasy_points)),
+      opponent_position_fp_allowed = mean(.data$position_fantasy_points, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    dplyr::group_by(.data$season) |>
+    dplyr::mutate(
+      league_average = mean(.data$opponent_position_fp_allowed, na.rm = TRUE),
+      opponent_position_fp_allowed_shrunk = (
+        .data$games * .data$opponent_position_fp_allowed + 4 * .data$league_average
+      ) / (.data$games + 4),
+      matchup_score_0to100 = qb_wow_percent_rank_0to100(
+        .data$opponent_position_fp_allowed_shrunk,
+        higher_is_better = TRUE
+      )
+    ) |>
+    dplyr::ungroup() |>
+    dplyr::transmute(
+      position = .env$position,
+      prior_season = .data$season,
+      prediction_season = .data$season + 1L,
+      opponent = .data$opponent,
+      prior_season_games = .data$games,
+      opponent_position_fp_allowed = .data$opponent_position_fp_allowed,
+      opponent_position_fp_allowed_shrunk = .data$opponent_position_fp_allowed_shrunk,
+      matchup_score_0to100 = .data$matchup_score_0to100
+    )
+
+  opponent_season
+}
+
 wow_standardize_sos_week1_board <- function(position, df) {
   position <- toupper(position)
   if (position == "DST") {
     return(df |>
-             dplyr::transmute(
-               position = "DST",
-               season = suppressWarnings(as.integer(.data$predict_season)),
-               player = as.character(.data$player),
-               player_key = make_player_key(.data$player),
-               team = normalize_team_abbr(.data$team),
-               sos_rank = wow_prob_num(.data$dst_sos_rank),
-               sos_tier = as.character(.data$dst_sos_tier),
-               sos_final_score = wow_prob_num(.data$dst_sos_final_score),
-               sos_board_score = wow_prob_num(.data$dst_sos_final_score),
-               preseason_omfg = NA_real_,
-               anchor_ppg = wow_prob_num(.data$dst_sos_projected_ppg)
-             ))
+      dplyr::transmute(
+        position = "DST",
+        season = suppressWarnings(as.integer(.data$predict_season)),
+        player = as.character(.data$player),
+        player_key = make_player_key(.data$player),
+        team = normalize_team_abbr(.data$team),
+        sos_rank = wow_prob_num(.data$dst_sos_rank),
+        sos_tier = as.character(.data$dst_sos_tier),
+        sos_final_score = wow_prob_num(.data$dst_sos_final_score),
+        sos_board_score = wow_prob_num(.data$dst_sos_final_score),
+        preseason_omfg = NA_real_,
+        anchor_ppg = wow_prob_num(.data$dst_sos_projected_ppg)
+      ))
   }
-  
+
   df |>
     dplyr::transmute(
       position = .env$position,
@@ -8994,9 +9119,17 @@ wow_read_historical_sos_week1_board <- function(position) {
     utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
   )
   actual <- wow_read_week1_actuals(position)
-  
+  schedule <- wow_read_week1_schedule_history(position)
+  matchup <- wow_build_week1_matchup_context(position) |>
+    dplyr::select(-dplyr::all_of("position"))
+
   board |>
     dplyr::left_join(actual, by = c("season", "player_key")) |>
+    dplyr::left_join(schedule, by = c("season", "team")) |>
+    dplyr::left_join(
+      matchup,
+      by = c("season" = "prediction_season", "opponent" = "opponent")
+    ) |>
     dplyr::mutate(actual_week1_fp = dplyr::coalesce(.data$actual_week1_fp, 0)) |>
     dplyr::group_by(.data$season) |>
     dplyr::mutate(
@@ -9012,7 +9145,7 @@ wow_week1_linear_predict <- function(train, test) {
   train_model <- data.frame(actual_week1_fp = wow_prob_num(train$actual_week1_fp))
   test_model <- data.frame(row_id = seq_len(nrow(test)))
   model_cols <- character()
-  
+
   for (predictor in predictors) {
     train_values <- wow_prob_num(train[[predictor]])
     test_values <- wow_prob_num(test[[predictor]])
@@ -9027,7 +9160,7 @@ wow_week1_linear_predict <- function(train, test) {
     test_model[[model_col]][!is.finite(test_model[[model_col]])] <- 0
     model_cols <- c(model_cols, model_col)
   }
-  
+
   keep <- is.finite(train_model$actual_week1_fp)
   if (sum(keep) < 25L) return(rep(NA_real_, nrow(test)))
   fit <- try(
@@ -9050,7 +9183,7 @@ wow_week1_rank_probability <- function(train_rank_score, target, test_rank_score
   if (sum(keep) < 25L || length(unique(target[keep])) < 2L) {
     return(wow_prob_clamp(rep(base_rate, length(test_rank_score))))
   }
-  
+
   center <- stats::median(train_rank_score[keep], na.rm = TRUE)
   scale <- stats::mad(train_rank_score[keep], constant = 1.4826, na.rm = TRUE)
   if (!is.finite(scale) || scale <= 0) scale <- 15
@@ -9083,14 +9216,46 @@ wow_week1_candidate_scores <- function(train, test) {
   linear_projection <- wow_week1_linear_predict(train, test)
   linear_score <- qb_wow_percent_rank_0to100(linear_projection, higher_is_better = TRUE)
   rank_score <- wow_prob_num(test$sos_rank_score_0to100)
-  
-  data.frame(
+  matchup_score <- dplyr::coalesce(wow_prob_num(test$matchup_score_0to100), 50)
+  base_scores <- list(
     sos_rank_only = rank_score,
     preseason_linear = linear_score,
-    blend_70_linear_30_sos = 0.70 * linear_score + 0.30 * rank_score,
-    projected_week1_fp = linear_projection,
-    stringsAsFactors = FALSE
+    blend_70_linear_30_sos = 0.70 * linear_score + 0.30 * rank_score
   )
+  out <- data.frame(projected_week1_fp = linear_projection, stringsAsFactors = FALSE)
+  for (base_name in names(base_scores)) {
+    base_score <- base_scores[[base_name]]
+    out[[base_name]] <- base_score
+    out[[paste0(base_name, "_matchup_10")]] <- 0.90 * base_score + 0.10 * matchup_score
+    out[[paste0(base_name, "_matchup_20")]] <- 0.80 * base_score + 0.20 * matchup_score
+  }
+  out
+}
+
+wow_week1_score_to_points <- function(train, candidate, test_score) {
+  train_scores <- wow_week1_candidate_scores(train, train)
+  if (!candidate %in% names(train_scores)) return(rep(NA_real_, length(test_score)))
+  score <- wow_prob_num(train_scores[[candidate]])
+  actual <- wow_prob_num(train$actual_week1_fp)
+  season <- suppressWarnings(as.integer(train$season))
+  score_percentile <- ave(score, season, FUN = function(x) {
+    qb_wow_percent_rank_0to100(x, higher_is_better = TRUE)
+  })
+  test_percentile <- qb_wow_percent_rank_0to100(test_score, higher_is_better = TRUE)
+  keep <- is.finite(score_percentile) & is.finite(actual)
+  if (sum(keep) < 25L || length(unique(score_percentile[keep])) < 3L) {
+    return(rep(stats::median(actual[keep], na.rm = TRUE), length(test_score)))
+  }
+  fit_data <- data.frame(actual = actual[keep], percentile = score_percentile[keep])
+  fit <- try(stats::lm(actual ~ percentile, data = fit_data), silent = TRUE)
+  if (inherits(fit, "try-error")) return(rep(NA_real_, length(test_score)))
+  prediction <- try(
+    suppressWarnings(stats::predict(fit, newdata = data.frame(percentile = test_percentile))),
+    silent = TRUE
+  )
+  if (inherits(prediction, "try-error")) return(rep(NA_real_, length(test_score)))
+  bounds <- stats::quantile(actual[keep], probs = c(0.01, 0.99), na.rm = TRUE, names = FALSE)
+  pmax(pmin(as.numeric(prediction), bounds[[2]]), pmax(bounds[[1]], 0))
 }
 
 run_position_wow_week1_backtest <- function(position) {
@@ -9099,12 +9264,13 @@ run_position_wow_week1_backtest <- function(position) {
   seasons <- sort(unique(frame$season[is.finite(frame$season)]))
   rows <- list()
   idx <- 1L
-  
+
   for (test_season in seasons[seasons > min(seasons)]) {
-    train <- frame[frame$season < test_season, , drop = FALSE]
-    test <- frame[frame$season == test_season, , drop = FALSE]
+    train <- frame[!is.na(frame$season) & frame$season < test_season, , drop = FALSE]
+    test <- frame[!is.na(frame$season) & frame$season == test_season, , drop = FALSE]
     scores <- wow_week1_candidate_scores(train, test)
-    for (candidate in c("sos_rank_only", "preseason_linear", "blend_70_linear_30_sos")) {
+    candidate_names <- setdiff(names(scores), "projected_week1_fp")
+    for (candidate in candidate_names) {
       keep <- is.finite(scores[[candidate]]) & is.finite(test$actual_week1_fp)
       rows[[idx]] <- data.frame(
         position = position,
@@ -9113,13 +9279,13 @@ run_position_wow_week1_backtest <- function(position) {
         candidate = candidate,
         n = sum(keep),
         spearman = if (sum(keep) > 1L) suppressWarnings(stats::cor(scores[[candidate]][keep], test$actual_week1_fp[keep], method = "spearman")) else NA_real_,
-        mae = if (candidate == "preseason_linear" && sum(keep) > 0L) mean(abs(scores$projected_week1_fp[keep] - test$actual_week1_fp[keep])) else NA_real_,
+        mae = if (startsWith(candidate, "preseason_linear") && sum(keep) > 0L) mean(abs(scores$projected_week1_fp[keep] - test$actual_week1_fp[keep])) else NA_real_,
         stringsAsFactors = FALSE
       )
       idx <- idx + 1L
     }
   }
-  
+
   metrics <- dplyr::bind_rows(rows)
   summary <- metrics |>
     dplyr::group_by(.data$position, .data$candidate) |>
@@ -9131,13 +9297,28 @@ run_position_wow_week1_backtest <- function(position) {
       .groups = "drop"
     ) |>
     dplyr::arrange(dplyr::desc(.data$combined_score), dplyr::desc(.data$avg_spearman))
-  
+
+  best_baseline <- summary |>
+    dplyr::filter(!grepl("_matchup_", .data$candidate, fixed = TRUE)) |>
+    dplyr::slice_head(n = 1L)
+  summary <- summary |>
+    dplyr::mutate(
+      avg_gain_vs_best_baseline = .data$avg_spearman - best_baseline$avg_spearman[[1]],
+      combined_gain_vs_best_baseline = .data$combined_score - best_baseline$combined_score[[1]],
+      selection_eligible = !grepl("_matchup_", .data$candidate, fixed = TRUE) |
+        (.data$avg_gain_vs_best_baseline >= 0.005 & .data$combined_gain_vs_best_baseline >= 0.005)
+    )
+  selected_model <- summary |>
+    dplyr::filter(.data$selection_eligible) |>
+    dplyr::slice_head(n = 1L) |>
+    dplyr::pull(.data$candidate)
+
   list(
     position = position,
     frame = frame,
     metrics = metrics,
     summary = summary,
-    selected_model = summary$candidate[[1]]
+    selected_model = selected_model[[1]]
   )
 }
 
@@ -9187,7 +9368,7 @@ wow_default_week1_schedule <- function(prediction_season) {
   if (prediction_season != 2026L) {
     return(data.frame(team = character(), opponent = character(), stringsAsFactors = FALSE))
   }
-  
+
   # Official 2026 NFL Week 1 slate published May 14, 2026.
   # https://www.nfl.com/news/2026-nfl-schedule-release-complete-slate-of-week-1-games
   games <- data.frame(
@@ -9204,10 +9385,4515 @@ wow_default_week1_schedule <- function(prediction_season) {
   wow_normalize_week1_schedule(games, prediction_season)
 }
 
+wow_week1_stat_columns <- function(position) {
+  position <- toupper(as.character(position[[1]]))
+  switch(
+    position,
+    QB = c(
+      "pass_attempts", "pass_yards", "pass_td", "interceptions",
+      "rush_attempts", "rush_yards", "rush_td"
+    ),
+    RB = c(
+      "rush_attempts", "rush_yards", "rush_td", "targets", "receptions",
+      "receiving_yards", "receiving_td", "scrimmage_yards", "total_td"
+    ),
+    WR = c(
+      "targets", "receptions", "receiving_yards", "receiving_td", "air_yards",
+      "first_read_targets", "end_zone_targets", "receiving_first_downs",
+      "rush_attempts", "rush_yards", "rush_td", "scrimmage_yards", "total_td"
+    ),
+    TE = c(
+      "targets", "receptions", "receiving_yards", "receiving_td", "air_yards",
+      "first_read_targets", "end_zone_targets", "receiving_first_downs"
+    ),
+    K = c(
+      "fga", "fgm", "fga_40_49", "fgm_40_49", "fga_50_plus",
+      "fgm_50_plus", "xpa", "xpm"
+    ),
+    DST = c("sacks", "interceptions", "fumbles", "defensive_tds", "dst_fantasy_points"),
+    character()
+  )
+}
+
+wow_week1_actual_stat_path <- function(position) {
+  position <- toupper(as.character(position[[1]]))
+  file.path(
+    model_paths$wow_output_dir,
+    paste0(tolower(position), "_weekly_feature_base_2021_2025_regular.csv")
+  )
+}
+
+wow_read_week1_actual_stats <- function(position, seasons = 2023:2025) {
+  load_model_core_packages()
+  position <- toupper(as.character(position[[1]]))
+  path <- wow_week1_actual_stat_path(position)
+  if (!file.exists(path)) stop("Missing WOW Week 1 stat source: ", path, call. = FALSE)
+  raw <- utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+  stats <- wow_week1_stat_columns(position)
+  if (position == "K") {
+    if (!"xpa" %in% names(raw) && "extra_points_attempt" %in% names(raw)) {
+      raw$xpa <- wow_prob_num(raw$extra_points_attempt)
+    }
+    if (!"xpm" %in% names(raw) && "extra_points_made" %in% names(raw)) {
+      raw$xpm <- wow_prob_num(raw$extra_points_made)
+    }
+  }
+  if (position == "QB") {
+    raw$dropbacks <-
+      dplyr::coalesce(wow_prob_num(raw$pass_attempts), 0) +
+      dplyr::coalesce(wow_prob_num(raw$sacks), 0) +
+      dplyr::coalesce(wow_prob_num(raw$scrambles), 0)
+    stats <- unique(c(stats, "completions", "dropbacks"))
+  }
+  for (stat in setdiff(stats, names(raw))) raw[[stat]] <- NA_real_
+  if (!all(c("season", "week", "player") %in% names(raw))) {
+    stop("WOW Week 1 stat source has an unexpected schema: ", path, call. = FALSE)
+  }
+  week1 <- raw |>
+    dplyr::mutate(
+      season = suppressWarnings(as.integer(.data$season)),
+      week = suppressWarnings(as.integer(.data$week)),
+      player_key = make_player_key(.data$player)
+    ) |>
+    dplyr::filter(
+      .data$season %in% as.integer(.env$seasons),
+      .data$week == 1L,
+      nzchar(.data$player_key)
+    ) |>
+    dplyr::group_by(.data$season, .data$player_key) |>
+    dplyr::summarise(
+      dplyr::across(
+        dplyr::all_of(stats),
+        ~ if (any(is.finite(wow_prob_num(.x)))) sum(wow_prob_num(.x), na.rm = TRUE) else NA_real_
+      ),
+      .groups = "drop"
+    )
+  dplyr::bind_rows(lapply(stats, function(stat) {
+    data.frame(
+      position = position,
+      test_season = week1$season,
+      player_key = week1$player_key,
+      stat = stat,
+      actual_week1 = wow_prob_num(week1[[stat]]),
+      stringsAsFactors = FALSE
+    )
+  }))
+}
+
+wow_week1_finish_bucket <- function(position, rank) {
+  position <- toupper(as.character(position[[1]]))
+  spec <- switch(
+    position,
+    QB = list(
+      breaks = c(0, 6, 12, 18, 24, 32, Inf),
+      labels = c("1-6", "7-12", "13-18", "19-24", "25-32", "33+")
+    ),
+    RB = list(
+      breaks = c(0, 12, 24, 36, 48, 60, 100, Inf),
+      labels = c("1-12", "13-24", "25-36", "37-48", "49-60", "61-100", "101+")
+    ),
+    WR = list(
+      breaks = c(0, 12, 24, 36, 48, 60, 84, 120, Inf),
+      labels = c("1-12", "13-24", "25-36", "37-48", "49-60", "61-84", "85-120", "121+")
+    ),
+    TE = list(
+      breaks = c(0, 6, 12, 18, 24, 36, 48, 72, Inf),
+      labels = c("1-6", "7-12", "13-18", "19-24", "25-36", "37-48", "49-72", "73+")
+    ),
+    K = list(
+      breaks = c(0, 6, 12, 18, 24, 32, Inf),
+      labels = c("1-6", "7-12", "13-18", "19-24", "25-32", "33+")
+    ),
+    DST = list(
+      breaks = c(0, 6, 12, 18, 24, 32, Inf),
+      labels = c("1-6", "7-12", "13-18", "19-24", "25-32", "33+")
+    ),
+    stop("Unsupported Week 1 finish-curve position: ", position, call. = FALSE)
+  )
+  as.character(cut(
+    suppressWarnings(as.numeric(rank)),
+    breaks = spec$breaks,
+    labels = spec$labels,
+    right = TRUE
+  ))
+}
+
+wow_read_week1_participation <- function(position, seasons = 2023:2025) {
+  load_model_core_packages()
+  position <- toupper(as.character(position[[1]]))
+  path <- wow_week1_actual_stat_path(position)
+  if (!file.exists(path)) stop("Missing WOW Week 1 participation source: ", path, call. = FALSE)
+  raw <- utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+  for (column in c(
+    "pass_attempts", "sacks", "scrambles", "rush_attempts", "targets", "routes",
+    "fga", "xpa", "dst_fantasy_points"
+  )) {
+    if (!column %in% names(raw)) raw[[column]] <- 0
+  }
+
+  raw$participation_volume <- if (position == "QB") {
+    dplyr::coalesce(wow_prob_num(raw$pass_attempts), 0) +
+      dplyr::coalesce(wow_prob_num(raw$sacks), 0) +
+      dplyr::coalesce(wow_prob_num(raw$scrambles), 0) +
+      dplyr::coalesce(wow_prob_num(raw$rush_attempts), 0)
+  } else if (position == "RB") {
+    pmax(
+      dplyr::coalesce(wow_prob_num(raw$routes), 0),
+      dplyr::coalesce(wow_prob_num(raw$rush_attempts), 0) +
+        dplyr::coalesce(wow_prob_num(raw$targets), 0)
+    )
+  } else if (position %in% c("WR", "TE")) {
+    pmax(
+      dplyr::coalesce(wow_prob_num(raw$routes), 0),
+      dplyr::coalesce(wow_prob_num(raw$rush_attempts), 0) +
+        dplyr::coalesce(wow_prob_num(raw$targets), 0)
+    )
+  } else if (position == "K") {
+    dplyr::coalesce(wow_prob_num(raw$fga), 0) +
+      dplyr::coalesce(wow_prob_num(raw$xpa), 0)
+  } else if (position == "DST") {
+    rep(1, nrow(raw))
+  } else {
+    rep(0, nrow(raw))
+  }
+
+  raw |>
+    dplyr::mutate(
+      season = suppressWarnings(as.integer(.data$season)),
+      week = suppressWarnings(as.integer(.data$week)),
+      player_key = make_player_key(.data$player)
+    ) |>
+    dplyr::filter(
+      .data$season %in% as.integer(.env$seasons),
+      .data$week == 1L,
+      nzchar(.data$player_key)
+    ) |>
+    dplyr::group_by(.data$season, .data$player_key) |>
+    dplyr::summarise(
+      participation_volume = sum(.data$participation_volume, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    dplyr::mutate(actual_participated = .data$participation_volume > 0)
+}
+
+build_wow_week1_actual_finish_curve <- function(position, seasons = 2023:2025) {
+  load_model_core_packages()
+  position <- toupper(as.character(position[[1]]))
+  spec <- wow_week1_actual_source_spec(position)
+  raw <- utils::read.csv(spec$path, stringsAsFactors = FALSE, check.names = FALSE)
+  stats <- wow_week1_stat_columns(position)
+  if (position == "K") {
+    if (!"xpa" %in% names(raw) && "extra_points_attempt" %in% names(raw)) {
+      raw$xpa <- wow_prob_num(raw$extra_points_attempt)
+    }
+    if (!"xpm" %in% names(raw) && "extra_points_made" %in% names(raw)) {
+      raw$xpm <- wow_prob_num(raw$extra_points_made)
+    }
+  }
+  if (position == "QB") {
+    for (column in c("pass_attempts", "sacks", "scrambles")) {
+      if (!column %in% names(raw)) raw[[column]] <- 0
+    }
+    raw$dropbacks <-
+      dplyr::coalesce(wow_prob_num(raw$pass_attempts), 0) +
+      dplyr::coalesce(wow_prob_num(raw$sacks), 0) +
+      dplyr::coalesce(wow_prob_num(raw$scrambles), 0)
+    stats <- unique(c(stats, "completions", "dropbacks"))
+  }
+  for (stat in setdiff(stats, names(raw))) raw[[stat]] <- NA_real_
+  participation <- wow_read_week1_participation(position, seasons)
+
+  detail <- raw |>
+    dplyr::mutate(
+      season = suppressWarnings(as.integer(.data$season)),
+      week = suppressWarnings(as.integer(.data$week)),
+      player_key = make_player_key(.data$player),
+      actual_week1_fp = wow_prob_num(.data[[spec$points]])
+    ) |>
+    dplyr::filter(
+      .data$season %in% as.integer(.env$seasons),
+      .data$week == 1L,
+      nzchar(.data$player_key)
+    ) |>
+    dplyr::group_by(.data$season, .data$player_key) |>
+    dplyr::summarise(
+      dplyr::across(
+        dplyr::all_of(stats),
+        ~ if (any(is.finite(wow_prob_num(.x)))) sum(wow_prob_num(.x), na.rm = TRUE) else NA_real_
+      ),
+      actual_week1_fp = if (any(is.finite(.data$actual_week1_fp))) {
+        max(.data$actual_week1_fp, na.rm = TRUE)
+      } else {
+        NA_real_
+      },
+      .groups = "drop"
+    ) |>
+    dplyr::left_join(participation, by = c("season", "player_key")) |>
+    dplyr::mutate(actual_participated = dplyr::coalesce(.data$actual_participated, FALSE)) |>
+    dplyr::filter(.data$actual_participated, is.finite(.data$actual_week1_fp)) |>
+    dplyr::arrange(.data$season, dplyr::desc(.data$actual_week1_fp), .data$player_key) |>
+    dplyr::group_by(.data$season) |>
+    dplyr::mutate(actual_finish_rank = dplyr::row_number()) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(
+      position = .env$position,
+      finish_bucket = wow_week1_finish_bucket(.env$position, .data$actual_finish_rank)
+    ) |>
+    dplyr::filter(!is.na(.data$finish_bucket))
+
+  detail |>
+    dplyr::group_by(.data$position, .data$finish_bucket) |>
+    dplyr::summarise(
+      historical_seasons = dplyr::n_distinct(.data$season, na.rm = TRUE),
+      historical_finish_rows = dplyr::n(),
+      historical_finish_avg_fantasy_points = mean(.data$actual_week1_fp, na.rm = TRUE),
+      historical_finish_median_fantasy_points = stats::median(.data$actual_week1_fp, na.rm = TRUE),
+      historical_finish_p25_fantasy_points = as.numeric(
+        stats::quantile(.data$actual_week1_fp, 0.25, na.rm = TRUE)
+      ),
+      historical_finish_p75_fantasy_points = as.numeric(
+        stats::quantile(.data$actual_week1_fp, 0.75, na.rm = TRUE)
+      ),
+      dplyr::across(
+        dplyr::all_of(stats),
+        ~ mean(wow_prob_num(.x), na.rm = TRUE),
+        .names = "historical_finish_avg_{.col}"
+      ),
+      .groups = "drop"
+    )
+}
+
+run_core_wow_week1_stat_backtest <- function(
+    seasons = 2023:2025,
+    prediction_path = file.path(
+      wow_production_output_dir(),
+      "core_sos_stat_projection_reconciled_backtest_predictions_2023_2025.csv"
+    ),
+    write_output = TRUE,
+    output_dir = wow_production_output_dir()
+) {
+  load_model_core_packages()
+  if (!file.exists(prediction_path)) {
+    stop("Missing SOS stat backtest predictions for WOW Week 1: ", prediction_path, call. = FALSE)
+  }
+  predictions <- utils::read.csv(prediction_path, stringsAsFactors = FALSE, check.names = FALSE) |>
+    dplyr::filter(
+      .data$projection_version == "reconciled",
+      suppressWarnings(as.integer(.data$test_season)) %in% as.integer(.env$seasons)
+    ) |>
+    dplyr::transmute(
+      position = toupper(as.character(.data$position)),
+      test_season = suppressWarnings(as.integer(.data$test_season)),
+      player_key = as.character(.data$player_key),
+      stat = as.character(.data$stat),
+      target_games = pmax(wow_prob_num(.data$target_games), 1),
+      predicted_week1 = wow_prob_num(.data$prediction) / .data$target_games
+    )
+  actuals <- dplyr::bind_rows(lapply(
+    c("QB", "RB", "WR", "TE", "K", "DST"),
+    wow_read_week1_actual_stats,
+    seasons = seasons
+  ))
+  joined <- predictions |>
+    dplyr::inner_join(
+      actuals,
+      by = c("position", "test_season", "player_key", "stat"),
+      relationship = "many-to-one"
+    ) |>
+    dplyr::filter(is.finite(.data$predicted_week1), is.finite(.data$actual_week1))
+  metrics <- joined |>
+    dplyr::group_by(.data$position, .data$stat) |>
+    dplyr::summarise(
+      test_seasons = paste(sort(unique(.data$test_season)), collapse = ","),
+      n = dplyr::n(),
+      mean_actual = mean(.data$actual_week1),
+      mae = mean(abs(.data$predicted_week1 - .data$actual_week1)),
+      rmse = sqrt(mean((.data$predicted_week1 - .data$actual_week1)^2)),
+      spearman = if (
+        dplyr::n() >= 3L &&
+          length(unique(.data$predicted_week1)) > 1L &&
+          length(unique(.data$actual_week1)) > 1L
+      ) suppressWarnings(stats::cor(.data$predicted_week1, .data$actual_week1, method = "spearman")) else NA_real_,
+      .groups = "drop"
+    ) |>
+    dplyr::mutate(
+      normalized_rmse = dplyr::if_else(abs(.data$mean_actual) > 1e-8, .data$rmse / abs(.data$mean_actual), NA_real_),
+      reliability = dplyr::case_when(
+        .data$n >= 75L & is.finite(.data$spearman) & .data$spearman >= 0.35 ~ "strong",
+        .data$n >= 40L & is.finite(.data$spearman) & .data$spearman >= 0.15 ~ "usable",
+        TRUE ~ "high_variance"
+      )
+    ) |>
+    dplyr::arrange(.data$position, .data$stat)
+  if (isTRUE(write_output)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    utils::write.csv(
+      metrics,
+      file.path(output_dir, "core_wow_week1_stat_backtest_metrics_2023_2025.csv"),
+      row.names = FALSE,
+      na = ""
+    )
+  }
+  assign("core_wow_week1_stat_backtest", metrics, envir = .GlobalEnv)
+  metrics
+}
+
+wow_week1_implied_points <- function(df, position) {
+  position <- toupper(as.character(position[[1]]))
+  stat <- function(name) {
+    column <- paste0("projected_week1_", name)
+    if (column %in% names(df)) dplyr::coalesce(wow_prob_num(df[[column]]), 0) else rep(0, nrow(df))
+  }
+  switch(
+    position,
+    QB = 0.04 * stat("pass_yards") + 4 * stat("pass_td") - 2 * stat("interceptions") +
+      0.10 * stat("rush_yards") + 6 * stat("rush_td"),
+    RB = 0.10 * stat("rush_yards") + 6 * stat("rush_td") + 0.5 * stat("receptions") +
+      0.10 * stat("receiving_yards") + 6 * stat("receiving_td"),
+    WR = 0.10 * stat("rush_yards") + 6 * stat("rush_td") + 0.5 * stat("receptions") +
+      0.10 * stat("receiving_yards") + 6 * stat("receiving_td"),
+    TE = 0.5 * stat("receptions") + 0.10 * stat("receiving_yards") + 6 * stat("receiving_td"),
+    K = pmax(stat("fgm") - stat("fgm_40_49") - stat("fgm_50_plus"), 0) * 3 +
+      stat("fgm_40_49") * 4 + stat("fgm_50_plus") * 5 + stat("xpm"),
+    DST = stat("dst_fantasy_points"),
+    rep(NA_real_, nrow(df))
+  )
+}
+
+wow_rebuild_week1_derived_stats <- function(df, position) {
+  position <- toupper(as.character(position[[1]]))
+  get_stat <- function(name) paste0("projected_week1_", name)
+  if (position %in% c("RB", "WR")) {
+    df[[get_stat("scrimmage_yards")]] <- dplyr::coalesce(wow_prob_num(df[[get_stat("rush_yards")]]), 0) +
+      dplyr::coalesce(wow_prob_num(df[[get_stat("receiving_yards")]]), 0)
+    df[[get_stat("total_td")]] <- dplyr::coalesce(wow_prob_num(df[[get_stat("rush_td")]]), 0) +
+      dplyr::coalesce(wow_prob_num(df[[get_stat("receiving_td")]]), 0)
+  }
+  if (position == "RB") {
+    df[[get_stat("opportunities")]] <-
+      dplyr::coalesce(wow_prob_num(df[[get_stat("rush_attempts")]]), 0) +
+      dplyr::coalesce(wow_prob_num(df[[get_stat("targets")]]), 0)
+  }
+  df
+}
+
+wow_build_qb_week1_derived_profile_rates <- function(seasons = 2023:2025) {
+  load_model_core_packages()
+  path <- wow_week1_actual_stat_path("QB")
+  weekly <- utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE) |>
+    dplyr::filter(.data$season %in% .env$seasons, .data$pass_attempts > 0) |>
+    dplyr::mutate(
+      pass_attempts = wow_prob_num(.data$pass_attempts),
+      completions = wow_prob_num(.data$completions),
+      sacks_taken = wow_prob_num(.data$sacks),
+      scrambles = wow_prob_num(.data$scrambles)
+    )
+  league_attempts <- sum(weekly$pass_attempts, na.rm = TRUE)
+  fallback <- c(
+    completion_rate = sum(weekly$completions, na.rm = TRUE) / league_attempts,
+    sacks_per_attempt = sum(weekly$sacks_taken, na.rm = TRUE) / league_attempts,
+    scrambles_per_attempt = sum(weekly$scrambles, na.rm = TRUE) / league_attempts
+  )
+  profiles <- weekly |>
+    dplyr::group_by(.data$player_key) |>
+    dplyr::summarise(
+      qb_profile_games = dplyr::n(),
+      qb_profile_attempts = sum(.data$pass_attempts, na.rm = TRUE),
+      qb_completion_rate = sum(.data$completions, na.rm = TRUE) / .data$qb_profile_attempts,
+      qb_sacks_per_attempt = sum(.data$sacks_taken, na.rm = TRUE) / .data$qb_profile_attempts,
+      qb_scrambles_per_attempt = sum(.data$scrambles, na.rm = TRUE) / .data$qb_profile_attempts,
+      .groups = "drop"
+    )
+  list(profiles = profiles, fallback = fallback)
+}
+
+wow_attach_week1_depth_context <- function(
+    board,
+    prediction_season = 2026L,
+    depth_chart_path = file.path(
+      wow_production_output_dir(),
+      paste0("sos_", prediction_season, "_depth_chart_week1.csv")
+    ),
+    qb_depth_order_path = file.path(
+      model_paths$nflfastr_root_dir,
+      paste0(prediction_season, " data"),
+      paste0("NFL_", prediction_season, "_Standard_Draft_QB_Rankings.csv")
+    ),
+    rb_depth_order_path = file.path(
+      model_paths$nflfastr_root_dir,
+      paste0(prediction_season, " data"),
+      paste0("NFL_", prediction_season, "_Half_PPR_Draft_RB_Rankings.csv")
+    ),
+    k_depth_order_path = file.path(
+      model_paths$nflfastr_root_dir,
+      paste0(prediction_season, " data"),
+      paste0("NFL_", prediction_season, "_Standard_Draft_K_Rankings.csv")
+    )
+) {
+  load_model_core_packages()
+  if (!file.exists(depth_chart_path)) {
+    stop("Missing Week 1 depth chart: ", depth_chart_path, call. = FALSE)
+  }
+  depth <- utils::read.csv(depth_chart_path, stringsAsFactors = FALSE, check.names = FALSE)
+  required <- c("prediction_season", "week", "team", "position", "player", "depth_team")
+  if (!all(required %in% names(depth))) {
+    stop("Week 1 depth chart is missing required columns: ", depth_chart_path, call. = FALSE)
+  }
+  depth <- depth |>
+    dplyr::mutate(
+      prediction_season = suppressWarnings(as.integer(.data$prediction_season)),
+      week = suppressWarnings(as.integer(.data$week)),
+      team = normalize_team_abbr(.data$team),
+      position = toupper(as.character(.data$position)),
+      player_key = make_player_key(.data$player),
+      week1_depth_team = suppressWarnings(as.integer(.data$depth_team)),
+      week1_depth_ecr = if ("depth_ecr" %in% names(depth)) wow_prob_num(.data$depth_ecr) else NA_real_,
+      week1_roster_source = if ("roster_source" %in% names(depth)) as.character(.data$roster_source) else "week1_depth_chart"
+    ) |>
+    dplyr::filter(
+      .data$prediction_season == as.integer(.env$prediction_season),
+      .data$week == 1L
+    ) |>
+    dplyr::select(
+      "team", "position", "player_key",
+      "week1_depth_team", "week1_depth_ecr", "week1_roster_source"
+    ) |>
+    dplyr::distinct(.data$team, .data$position, .data$player_key, .keep_all = TRUE)
+  read_ranked_depth <- function(path, position) {
+    if (!file.exists(path)) {
+      stop("Missing current ", position, " depth-order source: ", path, call. = FALSE)
+    }
+    rankings <- utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+    if (!all(c("Name", "Team") %in% names(rankings))) {
+      stop(position, " depth-order source must contain Name and Team columns.", call. = FALSE)
+    }
+    rankings |>
+      dplyr::transmute(
+        team = normalize_team_abbr(.data$Team),
+        position = .env$position,
+        player_key = make_player_key(.data$Name),
+        source_rank = dplyr::row_number()
+      ) |>
+      dplyr::mutate(
+        player_key = dplyr::if_else(
+          .env$position == "RB" & .data$player_key == "kenny gainwell",
+          "kenneth gainwell",
+          .data$player_key
+        ),
+        player_key = dplyr::if_else(
+          .env$position == "K" & .data$player_key == "andy borregales",
+          "andres borregales",
+          .data$player_key
+        ),
+        source_priority = dplyr::case_when(
+          .env$position == "K" & .data$team == "IND" & .data$player_key == "blake grupe" ~ -1,
+          .env$position == "K" & .data$team == "IND" ~ .data$source_rank + 1000,
+          TRUE ~ .data$source_rank
+        )
+      ) |>
+      dplyr::filter(!is.na(.data$team), .data$team != "", .data$team != "FA") |>
+      dplyr::arrange(.data$team, .data$source_priority, .data$source_rank) |>
+      dplyr::group_by(.data$team) |>
+      dplyr::mutate(week1_depth_team = dplyr::row_number()) |>
+      dplyr::ungroup() |>
+      dplyr::transmute(
+        .data$team,
+        .data$position,
+        .data$player_key,
+        week1_depth_team = as.integer(.data$week1_depth_team),
+        week1_depth_ecr = as.numeric(.data$source_rank),
+        week1_roster_source = paste0("manual_", tolower(.env$position), "_rankings_", prediction_season)
+      )
+  }
+  qb_depth <- read_ranked_depth(qb_depth_order_path, "QB")
+  rb_depth <- read_ranked_depth(rb_depth_order_path, "RB")
+  k_depth <- read_ranked_depth(k_depth_order_path, "K")
+  depth <- dplyr::bind_rows(
+    dplyr::filter(depth, !.data$position %in% c("QB", "RB", "K")),
+    qb_depth,
+    rb_depth,
+    k_depth
+  )
+  qb_starters <- depth |>
+    dplyr::filter(.data$position == "QB", .data$week1_depth_team == 1L)
+  if (nrow(qb_starters) != 32L || dplyr::n_distinct(qb_starters$team) != 32L) {
+    stop("Week 1 depth chart must contain exactly one QB1 for each of 32 teams.", call. = FALSE)
+  }
+  k_starters <- depth |>
+    dplyr::filter(.data$position == "K", .data$week1_depth_team == 1L)
+  if (nrow(k_starters) != 32L || dplyr::n_distinct(k_starters$team) != 32L) {
+    stop("Week 1 depth chart must contain exactly one K1 for each of 32 teams.", call. = FALSE)
+  }
+  board |>
+    dplyr::mutate(
+      team = normalize_team_abbr(.data$team),
+      position = toupper(as.character(.data$position)),
+      player_key = make_player_key(.data$player)
+    ) |>
+    dplyr::left_join(
+      depth,
+      by = c("team", "position", "player_key"),
+      relationship = "many-to-one"
+    ) |>
+    dplyr::mutate(
+      week1_qb_starter = dplyr::case_when(
+        .data$position != "QB" ~ NA,
+        .data$week1_depth_team == 1L ~ TRUE,
+        TRUE ~ FALSE
+      ),
+      week1_k_starter = dplyr::case_when(
+        .data$position != "K" ~ NA,
+        .data$week1_depth_team == 1L ~ TRUE,
+        TRUE ~ FALSE
+      ),
+      week1_opportunity_factor = dplyr::case_when(
+        .data$position == "QB" ~ dplyr::case_when(
+          .data$week1_depth_team == 1L ~ 1,
+          .data$week1_depth_team == 2L ~ 0.10,
+          .data$week1_depth_team == 3L ~ 0.035,
+          .data$week1_depth_team == 4L ~ 0.0125,
+          TRUE ~ 0
+        ),
+        .data$position == "K" & .data$week1_depth_team == 1L ~ 1,
+        .data$position == "K" ~ 0,
+        TRUE ~ 1
+      ),
+      week1_opportunity_status = dplyr::case_when(
+        .data$position == "QB" & .data$week1_qb_starter ~ "projected_week1_starter",
+        .data$position == "QB" & .data$week1_depth_team == 2L ~ "qb2_contingency_projection",
+        .data$position == "QB" & .data$week1_depth_team == 3L ~ "qb3_contingency_projection",
+        .data$position == "QB" & .data$week1_depth_team >= 4L ~ "qb4_plus_contingency_projection",
+        .data$position == "QB" ~ "not_on_week1_depth_chart_zeroed",
+        .data$position == "K" & .data$week1_k_starter ~ "projected_week1_kicker",
+        .data$position == "K" ~ "backup_kicker_zeroed",
+        TRUE ~ "not_applicable"
+      )
+    )
+}
+
+build_core_wow_week1_stat_projection_layer <- function(
+    week1_production,
+    prediction_season = 2026L,
+    sos_stat_path = file.path(
+      wow_production_output_dir(),
+      paste0("core_sos_stat_projection_wide_", prediction_season, ".csv")
+    ),
+    depth_chart_path = file.path(
+      wow_production_output_dir(),
+      paste0("sos_", prediction_season, "_depth_chart_week1.csv")
+    ),
+    matchup_weight = 0.08,
+    reconciliation_floor = 0.65,
+    reconciliation_ceiling = 1.55,
+    write_output = TRUE,
+    output_dir = wow_production_output_dir()
+) {
+  load_model_core_packages()
+  if (!is.data.frame(week1_production) || nrow(week1_production) == 0L) {
+    stop("WOW Week 1 stat projection requires a non-empty production board.", call. = FALSE)
+  }
+  if (!file.exists(sos_stat_path)) stop("Missing SOS production stat profile: ", sos_stat_path, call. = FALSE)
+  sos_stats <- utils::read.csv(sos_stat_path, stringsAsFactors = FALSE, check.names = FALSE) |>
+    dplyr::mutate(
+      position = toupper(as.character(.data$position)),
+      player_key = as.character(.data$player_key)
+    )
+  out <- week1_production |>
+    dplyr::mutate(
+      position = toupper(as.character(.data$position)),
+      player_key = make_player_key(.data$player)
+    ) |>
+    dplyr::left_join(
+      sos_stats,
+      by = c("position", "player_key"),
+      suffix = c("", "_sos"),
+      relationship = "many-to-one"
+    )
+  out <- wow_attach_week1_depth_context(
+    out,
+    prediction_season = prediction_season,
+    depth_chart_path = depth_chart_path
+  )
+  qb_derived_profiles <- wow_build_qb_week1_derived_profile_rates()
+  out <- out |>
+    dplyr::left_join(qb_derived_profiles$profiles, by = "player_key", relationship = "many-to-one") |>
+    dplyr::mutate(
+      qb_completion_rate = dplyr::coalesce(
+        wow_prob_num(.data$qb_completion_rate),
+        qb_derived_profiles$fallback[["completion_rate"]]
+      ),
+      qb_sacks_per_attempt = dplyr::coalesce(
+        wow_prob_num(.data$qb_sacks_per_attempt),
+        qb_derived_profiles$fallback[["sacks_per_attempt"]]
+      ),
+      qb_scrambles_per_attempt = dplyr::coalesce(
+        wow_prob_num(.data$qb_scrambles_per_attempt),
+        qb_derived_profiles$fallback[["scrambles_per_attempt"]]
+      ),
+      qb_derived_profile_source = dplyr::if_else(
+        is.finite(.data$qb_profile_games) & .data$qb_profile_games >= 3L,
+        "player_2023_2025",
+        "position_fallback"
+      )
+    )
+
+  built <- lapply(split(out, out$position), function(rows) {
+    position <- unique(rows$position)[[1]]
+    stats <- wow_week1_stat_columns(position)
+    denominator <- pmax(wow_prob_num(rows$stat_target_projected_games), 1)
+    matchup_z <- pmax(pmin((dplyr::coalesce(wow_prob_num(rows$matchup_score_0to100), 50) - 50) / 50, 1), -1)
+    matchup_multiplier <- 1 + matchup_weight * matchup_z
+      rows$stat_profile_games <- denominator
+      rows$stat_matchup_multiplier <- matchup_multiplier
+      rows$stat_profile_seeded <- FALSE
+      for (stat_name in stats) {
+      source_column <- paste0("projected_", stat_name)
+      output_column <- paste0("projected_week1_", stat_name)
+      source_value <- if (source_column %in% names(rows)) wow_prob_num(rows[[source_column]]) else rep(NA_real_, nrow(rows))
+      stat_multiplier <- if (position == "QB" && stat_name == "interceptions") {
+        pmax(2 - matchup_multiplier, 0.80)
+      } else {
+        matchup_multiplier
+      }
+        rows[[output_column]] <- pmax((source_value / denominator) * stat_multiplier, 0)
+      }
+      if (position == "K") {
+        stat_columns <- paste0("projected_week1_", stats)
+        missing_profile <- rowSums(!is.finite(as.matrix(rows[stat_columns]))) > 0L
+        complete_profile <- !missing_profile
+        if (any(missing_profile) && any(complete_profile)) {
+          for (column in stat_columns) {
+            seed_value <- stats::median(wow_prob_num(rows[[column]][complete_profile]), na.rm = TRUE)
+            rows[[column]][missing_profile] <- seed_value
+          }
+          rows$stat_profile_seeded[missing_profile] <- TRUE
+        }
+      }
+      rows <- wow_rebuild_week1_derived_stats(rows, position)
+    rows$model_projected_week1_fp <- wow_prob_num(rows$projected_week1_fp)
+    if (position == "DST") {
+      rows$projected_week1_dst_fantasy_points <- rows$model_projected_week1_fp
+    }
+    rows$stat_implied_week1_fp_before <- wow_week1_implied_points(rows, position)
+    raw_multiplier <- rows$model_projected_week1_fp /
+      pmax(rows$stat_implied_week1_fp_before, 0.25)
+    bounded_multiplier <- pmax(pmin(raw_multiplier, reconciliation_ceiling), reconciliation_floor)
+    bounded_multiplier[!is.finite(bounded_multiplier)] <- 1
+    scalable <- if (position == "QB") {
+      c("pass_td", "rush_td")
+    } else {
+      setdiff(stats, c("interceptions", "scrimmage_yards", "total_td", "dst_fantasy_points"))
+    }
+    for (stat_name in scalable) {
+      column <- paste0("projected_week1_", stat_name)
+      rows[[column]] <- pmax(wow_prob_num(rows[[column]]) * bounded_multiplier, 0)
+    }
+    rows <- wow_rebuild_week1_derived_stats(rows, position)
+    rows$stat_reconciliation_raw_multiplier <- raw_multiplier
+    rows$stat_reconciliation_multiplier <- bounded_multiplier
+    rows$stat_implied_week1_fp_after <- wow_week1_implied_points(rows, position)
+    rows$projected_week1_fp <- rows$stat_implied_week1_fp_after
+    rows$ungated_projected_week1_fp <- rows$projected_week1_fp
+    rows$stat_projection_delta_vs_model <- rows$projected_week1_fp - rows$model_projected_week1_fp
+    rows$stat_projection_gap_after <- rows$projected_week1_fp - rows$stat_implied_week1_fp_after
+    if (position == "QB") {
+      rows$projected_week1_completions <- pmin(
+        rows$projected_week1_pass_attempts,
+        rows$projected_week1_pass_attempts * rows$qb_completion_rate
+      )
+      rows$projected_week1_sacks_taken <- pmax(
+        rows$projected_week1_pass_attempts * rows$qb_sacks_per_attempt,
+        0
+      )
+      rows$projected_week1_scrambles <- pmax(
+        rows$projected_week1_pass_attempts * rows$qb_scrambles_per_attempt,
+        0
+      )
+      rows$projected_week1_dropbacks <-
+        rows$projected_week1_pass_attempts +
+        rows$projected_week1_sacks_taken +
+        rows$projected_week1_scrambles
+      inactive_qb <- !rows$week1_qb_starter
+      gated_columns <- grep("^projected_week1_", names(rows), value = TRUE)
+      for (column in gated_columns) {
+        rows[[column]][inactive_qb] <-
+          rows[[column]][inactive_qb] * rows$week1_opportunity_factor[inactive_qb]
+      }
+      rows$stat_implied_week1_fp_after <- wow_week1_implied_points(rows, position)
+      rows$projected_week1_fp <- rows$stat_implied_week1_fp_after
+      rows$stat_projection_delta_vs_model <- rows$projected_week1_fp - rows$model_projected_week1_fp
+      rows$stat_projection_gap_after <- rows$projected_week1_fp - rows$stat_implied_week1_fp_after
+    }
+    if (position == "K") {
+      inactive_k <- !rows$week1_k_starter
+      inactive_k[is.na(inactive_k)] <- TRUE
+      gated_columns <- grep("^projected_week1_", names(rows), value = TRUE)
+      for (column in gated_columns) {
+        rows[[column]][inactive_k] <- 0
+      }
+      rows$stat_implied_week1_fp_after <- wow_week1_implied_points(rows, position)
+      rows$projected_week1_fp <- rows$stat_implied_week1_fp_after
+      rows$stat_projection_delta_vs_model <- rows$projected_week1_fp - rows$model_projected_week1_fp
+      rows$stat_projection_gap_after <- rows$projected_week1_fp - rows$stat_implied_week1_fp_after
+    }
+    rows <- rows |>
+      dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+      dplyr::mutate(
+        rank = dplyr::row_number(),
+        tier = wow_week1_tier(.env$position, .data$rank),
+        final_score = .data$projected_week1_fp
+      )
+    probability_columns <- intersect(
+      paste0("prob_week_", names(wow_prob_targets(position))),
+      names(rows)
+    )
+    for (column in probability_columns) {
+      rows[[column]] <- sort(wow_prob_num(rows[[column]]), decreasing = TRUE, na.last = TRUE)
+      if (position %in% c("QB", "K")) {
+        rows[[column]] <- rows[[column]] * rows$week1_opportunity_factor
+      }
+    }
+    rows
+  })
+  out <- dplyr::bind_rows(built) |>
+    dplyr::arrange(.data$position, .data$rank)
+
+  audit <- dplyr::bind_rows(lapply(split(out, out$position), function(rows) {
+    position <- unique(rows$position)[[1]]
+    stat_columns <- paste0("projected_week1_", wow_week1_stat_columns(position))
+    values <- as.matrix(rows[stat_columns])
+    finite_stats <- sum(is.finite(values))
+    expected_stats <- length(values)
+    derived_stat_columns <- if (position == "QB") {
+      c(
+        "projected_week1_completions", "projected_week1_sacks_taken",
+        "projected_week1_scrambles", "projected_week1_dropbacks"
+      )
+    } else {
+      character()
+    }
+    missing_derived_stat_cells <- if (length(derived_stat_columns) > 0L) {
+      sum(!is.finite(as.matrix(rows[derived_stat_columns])))
+    } else {
+      0L
+    }
+    profile_violations <- 0L
+    if (position %in% c("RB", "WR")) {
+      profile_violations <- sum(abs(
+        rows$projected_week1_scrimmage_yards -
+          (rows$projected_week1_rush_yards + rows$projected_week1_receiving_yards)
+      ) > 1e-8, na.rm = TRUE) + sum(abs(
+        rows$projected_week1_total_td -
+          (rows$projected_week1_rush_td + rows$projected_week1_receiving_td)
+      ) > 1e-8, na.rm = TRUE)
+    }
+    qb_depth_starters <- if (position == "QB") sum(rows$week1_qb_starter, na.rm = TRUE) else NA_integer_
+    qb_starters_in_top32 <- if (position == "QB") sum(rows$week1_qb_starter & rows$rank <= 32L, na.rm = TRUE) else NA_integer_
+    qb_backups_in_top32 <- if (position == "QB") sum(!rows$week1_qb_starter & rows$rank <= 32L, na.rm = TRUE) else NA_integer_
+    qb_inactive_positive_projections <- if (position == "QB") {
+      sum(!rows$week1_qb_starter & rows$projected_week1_fp > 1e-9, na.rm = TRUE)
+    } else {
+      NA_integer_
+    }
+    qb_depth_order_violations <- if (position == "QB") {
+      rows |>
+        dplyr::filter(is.finite(.data$week1_depth_team)) |>
+        dplyr::arrange(.data$team, .data$week1_depth_team) |>
+        dplyr::group_by(.data$team) |>
+        dplyr::summarise(
+          violations = sum(diff(.data$projected_week1_fp) > 1e-9, na.rm = TRUE),
+          .groups = "drop"
+        ) |>
+        dplyr::summarise(total = sum(.data$violations)) |>
+        dplyr::pull(.data$total)
+    } else {
+      NA_integer_
+    }
+    qb_gate_pass <- position != "QB" || (
+      qb_depth_starters == 32L && qb_starters_in_top32 == 32L &&
+        qb_backups_in_top32 == 0L && qb_depth_order_violations == 0L
+    )
+    status <- if (
+      nrow(rows) > 0L &&
+        finite_stats == expected_stats &&
+        missing_derived_stat_cells == 0L &&
+        all(rows$stat_reconciliation_multiplier >= reconciliation_floor - 1e-9) &&
+        all(rows$stat_reconciliation_multiplier <= reconciliation_ceiling + 1e-9) &&
+        profile_violations == 0L &&
+        qb_gate_pass
+    ) "PASS" else "FAIL"
+    data.frame(
+      position = position,
+      prediction_season = as.integer(prediction_season),
+      rows = nrow(rows),
+          stat_columns = length(stat_columns),
+          derived_stat_columns = length(derived_stat_columns),
+          seeded_profile_rows = sum(rows$stat_profile_seeded, na.rm = TRUE),
+          missing_stat_cells = expected_stats - finite_stats,
+          missing_derived_stat_cells = missing_derived_stat_cells,
+      profile_identity_violations = profile_violations,
+      qb_depth_starters = qb_depth_starters,
+      qb_starters_in_top32 = qb_starters_in_top32,
+      qb_backups_in_top32 = qb_backups_in_top32,
+      qb_inactive_positive_projections = qb_inactive_positive_projections,
+      qb_depth_order_violations = qb_depth_order_violations,
+      avg_abs_points_gap_after = mean(abs(rows$stat_projection_gap_after), na.rm = TRUE),
+      max_abs_points_gap_after = max(abs(rows$stat_projection_gap_after), na.rm = TRUE),
+      avg_abs_delta_vs_model = mean(abs(rows$stat_projection_delta_vs_model), na.rm = TRUE),
+      max_abs_delta_vs_model = max(abs(rows$stat_projection_delta_vs_model), na.rm = TRUE),
+      min_reconciliation_multiplier = min(rows$stat_reconciliation_multiplier, na.rm = TRUE),
+      max_reconciliation_multiplier = max(rows$stat_reconciliation_multiplier, na.rm = TRUE),
+      status = status,
+      stringsAsFactors = FALSE
+    )
+  }))
+  if (any(audit$status != "PASS")) {
+    stop("WOW Week 1 stat projection audit failed for: ", paste(audit$position[audit$status != "PASS"], collapse = ", "), call. = FALSE)
+  }
+  qb_starter_gate_audit <- out |>
+    dplyr::filter(.data$position == "QB") |>
+    dplyr::transmute(
+      prediction_season = as.integer(prediction_season),
+      team = .data$team,
+      player = .data$player,
+      rank = .data$rank,
+      week1_depth_team = .data$week1_depth_team,
+      week1_qb_starter = .data$week1_qb_starter,
+      week1_opportunity_status = .data$week1_opportunity_status,
+      ungated_projected_week1_fp = .data$ungated_projected_week1_fp,
+      projected_week1_fp = .data$projected_week1_fp,
+      top32 = .data$rank <= 32L,
+      status = dplyr::case_when(
+        .data$week1_qb_starter & .data$rank <= 32L ~ "PASS_STARTER_TOP32",
+        !.data$week1_qb_starter & !is.na(.data$week1_depth_team) &
+          .data$rank > 32L & .data$projected_week1_fp > 0 ~ "PASS_DEPTH_WEIGHTED_BACKUP",
+        !.data$week1_qb_starter & is.na(.data$week1_depth_team) &
+          .data$rank > 32L & .data$projected_week1_fp == 0 ~ "PASS_UNLISTED_ZERO",
+        TRUE ~ "FAIL"
+      )
+    ) |>
+    dplyr::arrange(.data$rank)
+  backtest <- run_core_wow_week1_stat_backtest(write_output = FALSE)
+  if (isTRUE(write_output)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    utils::write.csv(
+      out,
+      file.path(output_dir, paste0("core_wow_week1_stat_projections_", prediction_season, ".csv")),
+      row.names = FALSE,
+      na = ""
+    )
+    utils::write.csv(
+      audit,
+      file.path(output_dir, paste0("core_wow_week1_stat_projection_audit_", prediction_season, ".csv")),
+      row.names = FALSE,
+      na = ""
+    )
+    utils::write.csv(
+      backtest,
+      file.path(output_dir, "core_wow_week1_stat_backtest_metrics_2023_2025.csv"),
+      row.names = FALSE,
+      na = ""
+    )
+    utils::write.csv(
+      qb_starter_gate_audit,
+      file.path(output_dir, paste0("core_wow_week1_qb_starter_gate_audit_", prediction_season, ".csv")),
+      row.names = FALSE,
+      na = ""
+    )
+  }
+  result <- list(
+    projections = out,
+    audit = audit,
+    backtest = backtest,
+    qb_starter_gate_audit = qb_starter_gate_audit
+  )
+  assign("core_wow_week1_stat_projections", result, envir = .GlobalEnv)
+  result
+}
+
+build_core_wow_week1_review_board <- function(
+    projections,
+    prediction_season = 2026L,
+    write_output = TRUE,
+    output_dir = file.path(
+      model_paths$model_root_dir,
+      "outputs", "editor", "week_over_week",
+      as.character(prediction_season), "week_1"
+    )
+) {
+  load_model_core_packages()
+  if (!is.data.frame(projections) || nrow(projections) == 0L) {
+    stop("WOW Week 1 review board requires non-empty projections.", call. = FALSE)
+  }
+  common_columns <- c(
+    "position", "rank", "tier", "player", "team", "opponent",
+    "selected_model", "preseason_omfg", "sos_rank", "sos_tier",
+    "matchup_score_0to100", "model_projected_week1_fp", "projected_week1_fp",
+    "stat_projection_delta_vs_model", "stat_profile_seeded",
+    "stat_reconciliation_multiplier", "ungated_projected_week1_fp",
+    "week1_depth_team", "week1_qb_starter", "week1_k_starter", "week1_opportunity_factor",
+    "week1_opportunity_status", "week1_roster_source",
+    "rb_historical_curve_bucket", "rb_pre_historical_curve_rank",
+    "rb_pre_historical_curve_fp", "rb_historical_curve_raw_multiplier",
+    "rb_historical_curve_bucket_multiplier", "rb_historical_curve_multiplier",
+    "rb_depth_guardrail_multiplier", "rb_depth_guardrail_applied",
+    "rb_depth_guardrail_reference_opportunities", "rb_depth_guardrail_reference_fp",
+    "rb_total_calibration_multiplier", "rb_pre_week1_context_rank",
+    "rb_pre_week1_context_fp", "rb_week1_context_type",
+    "rb_week1_context_multiplier", "rb_week1_context_applied",
+    "rb_week1_context_note", "wr_historical_curve_bucket",
+    "wr_pre_historical_curve_rank", "wr_pre_historical_curve_fp",
+    "wr_historical_curve_raw_multiplier", "wr_historical_curve_blended_multiplier",
+    "wr_historical_curve_bucket_multiplier", "wr_historical_curve_multiplier",
+    "wr_refinement_iterations", "wr_refinement_min_stat_multiplier",
+    "wr_refinement_max_stat_multiplier", "wr_pre_week1_context_rank",
+    "wr_pre_week1_context_fp", "wr_week1_context_type",
+    "wr_week1_context_multiplier", "wr_week1_context_applied",
+    "wr_expected_depth_team", "wr_expected_min_rank", "wr_expected_max_rank",
+    "wr_context_adjusted_matchup_score_0to100", "wr_week1_context_note",
+    "te_week1_historical_curve_bucket", "te_pre_historical_curve_rank",
+    "te_pre_historical_curve_fp", "te_week1_historical_curve_raw_multiplier",
+    "te_week1_historical_curve_blended_multiplier",
+    "te_week1_historical_curve_bucket_multiplier",
+    "te_week1_historical_curve_multiplier", "te_week1_refinement_iterations",
+    "te_week1_refinement_min_stat_multiplier",
+    "te_week1_refinement_max_stat_multiplier", "te_pre_week1_context_rank",
+    "te_pre_week1_context_fp", "te_week1_context_type",
+    "te_week1_context_multiplier", "te_week1_context_applied",
+    "te_week1_context_note", "te_pre_curve_coherence_rank",
+    "te_pre_curve_coherence_fp", "te_curve_coherence_bucket",
+    "te_curve_coherence_multiplier", "te_curve_coherence_iterations",
+    "dst_pre_week1_context_rank", "dst_pre_week1_context_fp",
+    "dst_week1_context_type", "dst_week1_context_multiplier",
+    "dst_week1_context_applied", "dst_week1_context_note",
+    "consensus_rank", "consensus_player", "consensus_team",
+    "consensus_opponent", "consensus_matchup", "consensus_matchup_stars",
+    "consensus_start_sit", "consensus_projected_fp", "consensus_rank_gap",
+    "consensus_abs_rank_gap", "consensus_opportunity", "consensus_efficiency",
+    "consensus_fp_gap", "consensus_model_projection_z",
+    "consensus_projection_z", "consensus_projection_z_gap",
+    "consensus_abs_projection_z_gap", "consensus_review_status",
+    "consensus_signal_priority", "consensus_source", "consensus_source_modified"
+  )
+  probability_columns <- grep("^prob_week_", names(projections), value = TRUE)
+  stat_columns <- grep("^projected_week1_", names(projections), value = TRUE)
+  board <- projections |>
+    dplyr::select(dplyr::all_of(intersect(
+      c(common_columns, probability_columns, stat_columns),
+      names(projections)
+    ))) |>
+    dplyr::arrange(
+      factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")),
+      .data$rank
+    )
+  summary <- board |>
+    dplyr::group_by(.data$position) |>
+    dplyr::summarise(
+      prediction_season = as.integer(prediction_season),
+      rows = dplyr::n(),
+      avg_projected_week1_fp = mean(.data$projected_week1_fp, na.rm = TRUE),
+      avg_abs_delta_vs_model = mean(abs(.data$stat_projection_delta_vs_model), na.rm = TRUE),
+      seeded_stat_profiles = sum(.data$stat_profile_seeded, na.rm = TRUE),
+      .groups = "drop"
+    )
+  manifest <- data.frame()
+  if (isTRUE(write_output)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    master_path <- file.path(output_dir, paste0("core_wow_week1_review_board_", prediction_season, ".csv"))
+    summary_path <- file.path(output_dir, paste0("core_wow_week1_review_summary_", prediction_season, ".csv"))
+    utils::write.csv(board, master_path, row.names = FALSE, na = "")
+    utils::write.csv(summary, summary_path, row.names = FALSE, na = "")
+    paths <- c(master_path, summary_path)
+    artifacts <- c("week1_review_master", "week1_review_summary")
+    for (position in c("QB", "RB", "WR", "TE", "K", "DST")) {
+      position_path <- file.path(output_dir, paste0(tolower(position), "_wow_week1_review_", prediction_season, ".csv"))
+      position_rows <- dplyr::filter(board, .data$position == .env$position)
+      position_common_columns <- common_columns[
+          (!grepl("^rb_", common_columns) | position == "RB") &
+          (!grepl("^wr_", common_columns) | position == "WR") &
+          (!grepl("^te_week1_", common_columns) | position == "TE") &
+          (!grepl("^te_pre_", common_columns) | position == "TE") &
+          (!grepl("^dst_", common_columns) | position == "DST")
+      ]
+      populated_probability_columns <- probability_columns[vapply(
+        probability_columns,
+        function(column) any(is.finite(wow_prob_num(position_rows[[column]]))),
+        logical(1)
+      )]
+      populated_stat_columns <- stat_columns[vapply(
+        stat_columns,
+        function(column) any(is.finite(wow_prob_num(position_rows[[column]]))),
+        logical(1)
+      )]
+      position_rows <- position_rows |>
+        dplyr::select(dplyr::all_of(intersect(
+          c(position_common_columns, populated_probability_columns, populated_stat_columns),
+          names(position_rows)
+        )))
+      utils::write.csv(
+        position_rows,
+        position_path,
+        row.names = FALSE,
+        na = ""
+      )
+      paths <- c(paths, position_path)
+      artifacts <- c(artifacts, paste0(tolower(position), "_week1_review"))
+    }
+    manifest <- data.frame(
+      artifact = artifacts,
+      output_path = paths,
+      exists = file.exists(paths),
+      stringsAsFactors = FALSE
+    )
+  }
+  result <- list(board = board, summary = summary, manifest = manifest)
+  assign("core_wow_week1_review_board", result, envir = .GlobalEnv)
+  result
+}
+
+wow_week1_qb_rank_bucket <- function(rank) {
+  as.character(cut(
+    suppressWarnings(as.numeric(rank)),
+    breaks = c(0, 6, 12, 18, 24, 32, Inf),
+    labels = c("1-6", "7-12", "13-18", "19-24", "25-32", "33+"),
+    right = TRUE
+  ))
+}
+
+build_qb_wow_week1_passing_audit <- function(
+    projections,
+    prediction_season = 2026L,
+    historical_test_seasons = 2023:2025,
+    write_output = TRUE,
+    output_dir = file.path(
+      model_paths$model_root_dir,
+      "outputs", "editor", "week_over_week",
+      as.character(prediction_season), "week_1"
+    )
+) {
+  load_model_core_packages()
+  qb_current <- projections |>
+    dplyr::filter(.data$position == "QB", .data$rank <= 32L) |>
+    dplyr::mutate(
+      player_key = make_player_key(.data$player),
+      rank_bucket = wow_week1_qb_rank_bucket(.data$rank)
+    )
+  frame <- wow_read_historical_sos_week1_board("QB")
+  actual_long <- wow_read_week1_actual_stats("QB", seasons = historical_test_seasons)
+  actual_wide <- reshape(
+    as.data.frame(actual_long),
+    idvar = c("position", "test_season", "player_key"),
+    timevar = "stat",
+    direction = "wide"
+  )
+  names(actual_wide) <- sub("actual_week1\\.", "actual_", names(actual_wide))
+  participation <- wow_read_week1_participation("QB", historical_test_seasons)
+  finish_curve <- build_wow_week1_actual_finish_curve("QB", historical_test_seasons)
+  selected_model <- run_position_wow_week1_backtest("QB")$selected_model
+  historical_rows <- list()
+  row_index <- 1L
+  for (test_season in historical_test_seasons) {
+    train <- frame[!is.na(frame$season) & frame$season < test_season, , drop = FALSE]
+    test <- frame[!is.na(frame$season) & frame$season == test_season, , drop = FALSE]
+    if (nrow(train) < 25L || nrow(test) == 0L) next
+    score <- wow_week1_candidate_scores(train, test)[[selected_model]]
+    test$projected_rank <- rank(-score, ties.method = "first", na.last = "keep")
+    test$rank_bucket <- wow_week1_qb_rank_bucket(test$projected_rank)
+    historical_rows[[row_index]] <- test |>
+      dplyr::left_join(
+        actual_wide,
+        by = c("position", "season" = "test_season", "player_key")
+      ) |>
+      dplyr::left_join(participation, by = c("season", "player_key"))
+    row_index <- row_index + 1L
+  }
+  historical_detail <- dplyr::bind_rows(historical_rows) |>
+    dplyr::filter(.data$projected_rank <= 32L) |>
+    dplyr::mutate(actual_participated = dplyr::coalesce(.data$actual_participated, FALSE))
+  historical_activity <- historical_detail |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      historical_forecast_rows = dplyr::n(),
+      historical_active_rows = sum(.data$actual_participated),
+      historical_inactive_rows = sum(!.data$actual_participated),
+      historical_active_rate = mean(.data$actual_participated),
+      historical_all_row_avg_fantasy_points = mean(.data$actual_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    )
+  historical <- historical_detail |>
+    dplyr::filter(.data$actual_participated) |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      historical_seasons = dplyr::n_distinct(.data$season),
+      historical_rows = dplyr::n(),
+      historical_avg_dropbacks = mean(.data$actual_dropbacks, na.rm = TRUE),
+      historical_avg_pass_attempts = mean(.data$actual_pass_attempts, na.rm = TRUE),
+      historical_avg_completions = mean(.data$actual_completions, na.rm = TRUE),
+      historical_avg_pass_yards = mean(.data$actual_pass_yards, na.rm = TRUE),
+      historical_avg_pass_td = mean(.data$actual_pass_td, na.rm = TRUE),
+      historical_avg_rush_yards = mean(.data$actual_rush_yards, na.rm = TRUE),
+      historical_avg_rush_td = mean(.data$actual_rush_td, na.rm = TRUE),
+      historical_avg_fantasy_points = mean(.data$actual_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    dplyr::left_join(historical_activity, by = "rank_bucket")
+  current <- qb_current |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      current_rows = dplyr::n(),
+      current_avg_dropbacks = mean(.data$projected_week1_dropbacks, na.rm = TRUE),
+      current_avg_pass_attempts = mean(.data$projected_week1_pass_attempts, na.rm = TRUE),
+      current_avg_completions = mean(.data$projected_week1_completions, na.rm = TRUE),
+      current_avg_pass_yards = mean(.data$projected_week1_pass_yards, na.rm = TRUE),
+      current_avg_pass_td = mean(.data$projected_week1_pass_td, na.rm = TRUE),
+      current_avg_rush_yards = mean(.data$projected_week1_rush_yards, na.rm = TRUE),
+      current_avg_rush_td = mean(.data$projected_week1_rush_td, na.rm = TRUE),
+      current_avg_fantasy_points = mean(.data$projected_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    )
+  curve <- dplyr::left_join(historical, current, by = "rank_bucket") |>
+    dplyr::mutate(
+      pass_attempt_ratio = .data$current_avg_pass_attempts / .data$historical_avg_pass_attempts,
+      completion_ratio = .data$current_avg_completions / .data$historical_avg_completions,
+      dropback_ratio = .data$current_avg_dropbacks / .data$historical_avg_dropbacks,
+      pass_yard_ratio = .data$current_avg_pass_yards / .data$historical_avg_pass_yards,
+      curve_status = dplyr::if_else(
+        .data$pass_attempt_ratio >= 0.85 & .data$pass_attempt_ratio <= 1.15 &
+          .data$completion_ratio >= 0.85 & .data$completion_ratio <= 1.15 &
+          .data$dropback_ratio >= 0.85 & .data$dropback_ratio <= 1.15 &
+          .data$pass_yard_ratio >= 0.75 & .data$pass_yard_ratio <= 1.30,
+        "PASS", "WATCH"
+      )
+    )
+  weekly <- utils::read.csv(wow_week1_actual_stat_path("QB"), stringsAsFactors = FALSE, check.names = FALSE) |>
+    dplyr::mutate(
+      dropbacks =
+        dplyr::coalesce(wow_prob_num(.data$pass_attempts), 0) +
+        dplyr::coalesce(wow_prob_num(.data$sacks), 0) +
+        dplyr::coalesce(wow_prob_num(.data$scrambles), 0)
+    )
+  recent_profile <- weekly |>
+    dplyr::filter(.data$season %in% 2023:2025, .data$pass_attempts > 0) |>
+    dplyr::group_by(.data$player_key) |>
+    dplyr::summarise(
+      profile_games = dplyr::n(),
+      historical_dropbacks_per_game = mean(.data$dropbacks, na.rm = TRUE),
+      historical_pass_attempts_per_game = mean(.data$pass_attempts, na.rm = TRUE),
+      historical_completions_per_game = mean(.data$completions, na.rm = TRUE),
+      historical_pass_yards_per_game = mean(.data$pass_yards, na.rm = TRUE),
+      historical_pass_td_per_game = mean(.data$pass_td, na.rm = TRUE),
+      .groups = "drop"
+    )
+  individual <- qb_current |>
+    dplyr::left_join(recent_profile, by = "player_key") |>
+    dplyr::mutate(
+      pass_attempt_profile_ratio = .data$projected_week1_pass_attempts / .data$historical_pass_attempts_per_game,
+      completion_profile_ratio = .data$projected_week1_completions / .data$historical_completions_per_game,
+      dropback_profile_ratio = .data$projected_week1_dropbacks / .data$historical_dropbacks_per_game,
+      pass_yard_profile_ratio = .data$projected_week1_pass_yards / .data$historical_pass_yards_per_game,
+      profile_status = dplyr::case_when(
+        is.na(.data$profile_games) | .data$profile_games < 3L ~ "limited_or_new_profile",
+        .data$pass_attempt_profile_ratio < 0.75 | .data$pass_attempt_profile_ratio > 1.25 |
+          .data$completion_profile_ratio < 0.75 | .data$completion_profile_ratio > 1.25 |
+          .data$dropback_profile_ratio < 0.75 | .data$dropback_profile_ratio > 1.25 |
+          .data$pass_yard_profile_ratio < 0.75 | .data$pass_yard_profile_ratio > 1.25 ~ "WATCH",
+        TRUE ~ "PASS"
+      )
+    ) |>
+    dplyr::select(
+      "rank", "player", "team", "opponent",
+      "projected_week1_dropbacks", "projected_week1_pass_attempts",
+      "projected_week1_completions", "projected_week1_pass_yards",
+      "projected_week1_pass_td", "profile_games",
+      "historical_dropbacks_per_game", "historical_pass_attempts_per_game",
+      "historical_completions_per_game", "historical_pass_yards_per_game",
+      "historical_pass_td_per_game", "dropback_profile_ratio",
+      "pass_attempt_profile_ratio", "completion_profile_ratio",
+      "pass_yard_profile_ratio", "profile_status"
+    ) |>
+    dplyr::arrange(.data$rank)
+  summary <- data.frame(
+    position = "QB",
+    prediction_season = as.integer(prediction_season),
+    curve_buckets = nrow(curve),
+    curve_buckets_passed = sum(curve$curve_status == "PASS", na.rm = TRUE),
+    individual_profiles_checked = sum(individual$profile_status != "limited_or_new_profile", na.rm = TRUE),
+    individual_profile_watch_rows = sum(individual$profile_status == "WATCH", na.rm = TRUE),
+    status = if (all(curve$curve_status == "PASS")) "PASS" else "WATCH",
+    stringsAsFactors = FALSE
+  )
+  manifest <- data.frame()
+  if (isTRUE(write_output)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    curve_path <- file.path(output_dir, paste0("qb_wow_week1_passing_curve_audit_", prediction_season, ".csv"))
+    finish_curve_path <- file.path(output_dir, "qb_wow_week1_actual_finish_curve_2023_2025.csv")
+    individual_path <- file.path(output_dir, paste0("qb_wow_week1_individual_passing_audit_", prediction_season, ".csv"))
+    summary_path <- file.path(output_dir, paste0("qb_wow_week1_passing_audit_summary_", prediction_season, ".csv"))
+    utils::write.csv(curve, curve_path, row.names = FALSE, na = "")
+    utils::write.csv(finish_curve, finish_curve_path, row.names = FALSE, na = "")
+    utils::write.csv(individual, individual_path, row.names = FALSE, na = "")
+    utils::write.csv(summary, summary_path, row.names = FALSE, na = "")
+    manifest <- data.frame(
+      artifact = c(
+        "qb_passing_curve_audit", "qb_actual_finish_curve",
+        "qb_individual_passing_audit", "qb_passing_audit_summary"
+      ),
+      output_path = c(curve_path, finish_curve_path, individual_path, summary_path),
+      exists = file.exists(c(curve_path, finish_curve_path, individual_path, summary_path)),
+      stringsAsFactors = FALSE
+    )
+  }
+  result <- list(
+    summary = summary,
+    curve = curve,
+    finish_curve = finish_curve,
+    individual = individual,
+    manifest = manifest
+  )
+  assign("qb_wow_week1_passing_audit", result, envir = .GlobalEnv)
+  result
+}
+
+wow_week1_rb_rank_bucket <- function(rank) {
+  as.character(cut(
+    suppressWarnings(as.numeric(rank)),
+    breaks = c(0, 12, 24, 36, 48, 60, 100, Inf),
+    labels = c("1-12", "13-24", "25-36", "37-48", "49-60", "61-100", "101+"),
+    right = TRUE
+  ))
+}
+
+build_rb_wow_week1_usage_audit <- function(
+    projections,
+    prediction_season = 2026L,
+    historical_test_seasons = 2023:2025,
+    write_output = TRUE,
+    output_dir = file.path(
+      model_paths$model_root_dir,
+      "outputs", "editor", "week_over_week",
+      as.character(prediction_season), "week_1"
+    )
+) {
+  load_model_core_packages()
+  rb_current <- projections |>
+    dplyr::filter(.data$position == "RB") |>
+    dplyr::mutate(
+      player_key = make_player_key(.data$player),
+      rank_bucket = wow_week1_rb_rank_bucket(.data$rank),
+      projected_week1_opportunities = dplyr::coalesce(
+        wow_prob_num(.data$projected_week1_opportunities),
+        wow_prob_num(.data$projected_week1_rush_attempts) + wow_prob_num(.data$projected_week1_targets)
+      )
+    )
+  frame <- wow_read_historical_sos_week1_board("RB")
+  actual_long <- wow_read_week1_actual_stats("RB", seasons = historical_test_seasons)
+  actual_wide <- reshape(
+    as.data.frame(actual_long),
+    idvar = c("position", "test_season", "player_key"),
+    timevar = "stat",
+    direction = "wide"
+  )
+  names(actual_wide) <- sub("actual_week1\\.", "actual_", names(actual_wide))
+  participation <- wow_read_week1_participation("RB", historical_test_seasons)
+  finish_curve <- build_wow_week1_actual_finish_curve("RB", historical_test_seasons)
+  selected_model <- run_position_wow_week1_backtest("RB")$selected_model
+  historical_rows <- list()
+  row_index <- 1L
+  for (test_season in historical_test_seasons) {
+    train <- frame[!is.na(frame$season) & frame$season < test_season, , drop = FALSE]
+    test <- frame[!is.na(frame$season) & frame$season == test_season, , drop = FALSE]
+    if (nrow(train) < 25L || nrow(test) == 0L) next
+    score <- wow_week1_candidate_scores(train, test)[[selected_model]]
+    test$projected_rank <- rank(-score, ties.method = "first", na.last = "keep")
+    test$rank_bucket <- wow_week1_rb_rank_bucket(test$projected_rank)
+    historical_rows[[row_index]] <- test |>
+      dplyr::left_join(
+        actual_wide,
+        by = c("position", "season" = "test_season", "player_key")
+      ) |>
+      dplyr::left_join(participation, by = c("season", "player_key"))
+    row_index <- row_index + 1L
+  }
+  historical_detail <- dplyr::bind_rows(historical_rows) |>
+    dplyr::filter(.data$projected_rank <= 100L) |>
+    dplyr::mutate(
+      actual_rush_attempts = dplyr::coalesce(.data$actual_rush_attempts, 0),
+      actual_targets = dplyr::coalesce(.data$actual_targets, 0),
+      actual_receptions = dplyr::coalesce(.data$actual_receptions, 0),
+      actual_rush_yards = dplyr::coalesce(.data$actual_rush_yards, 0),
+      actual_receiving_yards = dplyr::coalesce(.data$actual_receiving_yards, 0),
+      actual_scrimmage_yards = dplyr::coalesce(.data$actual_scrimmage_yards, 0),
+      actual_total_td = dplyr::coalesce(.data$actual_total_td, 0),
+      actual_week1_fp = dplyr::coalesce(.data$actual_week1_fp, 0),
+      actual_opportunities = .data$actual_rush_attempts + .data$actual_targets,
+      actual_participated = dplyr::coalesce(.data$actual_participated, FALSE)
+    )
+  historical_activity <- historical_detail |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      historical_forecast_rows = dplyr::n(),
+      historical_active_rows = sum(.data$actual_participated),
+      historical_inactive_rows = sum(!.data$actual_participated),
+      historical_active_rate = mean(.data$actual_participated),
+      historical_all_row_avg_fantasy_points = mean(.data$actual_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    )
+  historical <- historical_detail |>
+    dplyr::filter(.data$actual_participated) |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      historical_seasons = dplyr::n_distinct(.data$season),
+      historical_rows = dplyr::n(),
+      historical_avg_opportunities = mean(.data$actual_opportunities, na.rm = TRUE),
+      historical_avg_rush_attempts = mean(.data$actual_rush_attempts, na.rm = TRUE),
+      historical_avg_targets = mean(.data$actual_targets, na.rm = TRUE),
+      historical_avg_receptions = mean(.data$actual_receptions, na.rm = TRUE),
+      historical_avg_rush_yards = mean(.data$actual_rush_yards, na.rm = TRUE),
+      historical_avg_receiving_yards = mean(.data$actual_receiving_yards, na.rm = TRUE),
+      historical_avg_scrimmage_yards = mean(.data$actual_scrimmage_yards, na.rm = TRUE),
+      historical_avg_total_td = mean(.data$actual_total_td, na.rm = TRUE),
+      historical_avg_fantasy_points = mean(.data$actual_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    dplyr::left_join(historical_activity, by = "rank_bucket")
+  current <- rb_current |>
+    dplyr::filter(.data$rank <= 100L) |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      current_rows = dplyr::n(),
+      current_avg_opportunities = mean(.data$projected_week1_opportunities, na.rm = TRUE),
+      current_avg_rush_attempts = mean(.data$projected_week1_rush_attempts, na.rm = TRUE),
+      current_avg_targets = mean(.data$projected_week1_targets, na.rm = TRUE),
+      current_avg_receptions = mean(.data$projected_week1_receptions, na.rm = TRUE),
+      current_avg_rush_yards = mean(.data$projected_week1_rush_yards, na.rm = TRUE),
+      current_avg_receiving_yards = mean(.data$projected_week1_receiving_yards, na.rm = TRUE),
+      current_avg_scrimmage_yards = mean(.data$projected_week1_scrimmage_yards, na.rm = TRUE),
+      current_avg_total_td = mean(.data$projected_week1_total_td, na.rm = TRUE),
+      current_avg_fantasy_points = mean(.data$projected_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    )
+  curve <- dplyr::left_join(historical, current, by = "rank_bucket") |>
+    dplyr::mutate(
+      opportunity_ratio = .data$current_avg_opportunities / .data$historical_avg_opportunities,
+      rush_attempt_ratio = .data$current_avg_rush_attempts / .data$historical_avg_rush_attempts,
+      target_ratio = .data$current_avg_targets / .data$historical_avg_targets,
+      scrimmage_yard_ratio = .data$current_avg_scrimmage_yards / .data$historical_avg_scrimmage_yards,
+      fantasy_point_ratio = .data$current_avg_fantasy_points / .data$historical_avg_fantasy_points,
+      target_curve_in_tolerance =
+        (.data$target_ratio >= 0.70 & .data$target_ratio <= 1.30) |
+        (.data$historical_avg_targets < 0.50 &
+          abs(.data$current_avg_targets - .data$historical_avg_targets) <= 0.20),
+      curve_status = dplyr::if_else(
+        .data$opportunity_ratio >= 0.75 & .data$opportunity_ratio <= 1.25 &
+          .data$rush_attempt_ratio >= 0.75 & .data$rush_attempt_ratio <= 1.25 &
+          .data$target_curve_in_tolerance &
+          .data$scrimmage_yard_ratio >= 0.70 & .data$scrimmage_yard_ratio <= 1.30 &
+          .data$fantasy_point_ratio >= 0.70 & .data$fantasy_point_ratio <= 1.30,
+        "PASS", "WATCH"
+      )
+    )
+  weekly <- utils::read.csv(
+    wow_week1_actual_stat_path("RB"),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  ) |>
+    dplyr::mutate(
+      opportunities = dplyr::coalesce(wow_prob_num(.data$rush_attempts), 0) +
+        dplyr::coalesce(wow_prob_num(.data$targets), 0)
+    )
+  recent_profile <- weekly |>
+    dplyr::filter(.data$season %in% 2023:2025, .data$opportunities > 0) |>
+    dplyr::group_by(.data$player_key) |>
+    dplyr::summarise(
+      profile_games = dplyr::n(),
+      historical_opportunities_per_game = mean(.data$opportunities, na.rm = TRUE),
+      historical_rush_attempts_per_game = mean(.data$rush_attempts, na.rm = TRUE),
+      historical_targets_per_game = mean(.data$targets, na.rm = TRUE),
+      historical_receptions_per_game = mean(.data$receptions, na.rm = TRUE),
+      historical_rush_yards_per_game = mean(.data$rush_yards, na.rm = TRUE),
+      historical_receiving_yards_per_game = mean(.data$receiving_yards, na.rm = TRUE),
+      historical_scrimmage_yards_per_game = mean(.data$scrimmage_yards, na.rm = TRUE),
+      historical_total_td_per_game = mean(.data$total_td, na.rm = TRUE),
+      .groups = "drop"
+    )
+  individual <- rb_current |>
+    dplyr::filter(.data$rank <= 100L) |>
+    dplyr::left_join(recent_profile, by = "player_key") |>
+    dplyr::mutate(
+      opportunity_profile_ratio = .data$projected_week1_opportunities / .data$historical_opportunities_per_game,
+      rush_attempt_profile_ratio = .data$projected_week1_rush_attempts / .data$historical_rush_attempts_per_game,
+      target_profile_ratio = .data$projected_week1_targets / .data$historical_targets_per_game,
+      scrimmage_yard_profile_ratio = .data$projected_week1_scrimmage_yards / .data$historical_scrimmage_yards_per_game,
+      profile_status = dplyr::case_when(
+        is.na(.data$profile_games) | .data$profile_games < 4L ~ "limited_or_new_profile",
+        .data$opportunity_profile_ratio < 0.60 | .data$opportunity_profile_ratio > 1.40 |
+          .data$rush_attempt_profile_ratio < 0.60 | .data$rush_attempt_profile_ratio > 1.40 |
+          .data$target_profile_ratio < 0.50 | .data$target_profile_ratio > 1.50 |
+          .data$scrimmage_yard_profile_ratio < 0.60 | .data$scrimmage_yard_profile_ratio > 1.40 ~ "WATCH",
+        TRUE ~ "PASS"
+      )
+    ) |>
+    dplyr::select(
+      "rank", "player", "team", "opponent", "week1_depth_team",
+      "projected_week1_fp", "projected_week1_opportunities",
+      "projected_week1_rush_attempts", "projected_week1_targets",
+      "projected_week1_receptions", "projected_week1_rush_yards",
+      "projected_week1_receiving_yards", "projected_week1_scrimmage_yards",
+      "projected_week1_total_td", "profile_games",
+      "historical_opportunities_per_game", "historical_rush_attempts_per_game",
+      "historical_targets_per_game", "historical_receptions_per_game",
+      "historical_rush_yards_per_game", "historical_receiving_yards_per_game",
+      "historical_scrimmage_yards_per_game", "historical_total_td_per_game",
+      "opportunity_profile_ratio", "rush_attempt_profile_ratio",
+      "target_profile_ratio", "scrimmage_yard_profile_ratio", "profile_status"
+    ) |>
+    dplyr::arrange(.data$rank)
+  role <- rb_current |>
+    dplyr::group_by(.data$team) |>
+    dplyr::group_modify(~ {
+      rows <- .x
+      rows$shallower_best_rank <- vapply(seq_len(nrow(rows)), function(i) {
+        if (!is.finite(rows$week1_depth_team[[i]])) return(NA_real_)
+        values <- rows$rank[
+          is.finite(rows$week1_depth_team) &
+            rows$week1_depth_team == rows$week1_depth_team[[i]] - 1L &
+            is.finite(rows$rank)
+        ]
+        if (length(values) == 0L) NA_real_ else min(values, na.rm = TRUE)
+      }, numeric(1))
+      rows$shallower_min_opportunities <- vapply(seq_len(nrow(rows)), function(i) {
+        if (!is.finite(rows$week1_depth_team[[i]])) return(NA_real_)
+        values <- rows$projected_week1_opportunities[
+          is.finite(rows$week1_depth_team) &
+            rows$week1_depth_team == rows$week1_depth_team[[i]] - 1L &
+            is.finite(rows$projected_week1_opportunities)
+        ]
+        if (length(values) == 0L) NA_real_ else min(values, na.rm = TRUE)
+      }, numeric(1))
+      rows
+    }) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(
+      depth_rank_inversion = is.finite(.data$shallower_best_rank) & .data$rank < .data$shallower_best_rank,
+      depth_opportunity_inversion = is.finite(.data$shallower_min_opportunities) &
+        .data$projected_week1_opportunities > 1.15 * .data$shallower_min_opportunities,
+      role_status = dplyr::case_when(
+        !is.finite(.data$week1_depth_team) ~ "not_in_current_rb_rankings",
+        .data$week1_depth_team == 1L ~ "team_rb1",
+        .data$depth_rank_inversion | .data$depth_opportunity_inversion ~ "WATCH_COMMITTEE_INVERSION",
+        TRUE ~ "PASS_DEPTH_ORDER"
+      )
+    ) |>
+    dplyr::select(
+      "rank", "player", "team", "opponent", "week1_depth_team",
+      "projected_week1_fp", "projected_week1_opportunities",
+      "projected_week1_rush_attempts", "projected_week1_targets",
+      "depth_rank_inversion", "depth_opportunity_inversion", "role_status"
+    ) |>
+    dplyr::arrange(.data$rank)
+  summary <- data.frame(
+    position = "RB",
+    prediction_season = as.integer(prediction_season),
+    curve_buckets = nrow(curve),
+    curve_buckets_passed = sum(curve$curve_status == "PASS", na.rm = TRUE),
+    individual_profiles_checked = sum(individual$profile_status != "limited_or_new_profile", na.rm = TRUE),
+    individual_profile_watch_rows = sum(individual$profile_status == "WATCH", na.rm = TRUE),
+    committee_inversion_watch_rows = sum(role$role_status == "WATCH_COMMITTEE_INVERSION", na.rm = TRUE),
+    unmatched_depth_rows = sum(role$role_status == "not_in_current_rb_rankings", na.rm = TRUE),
+    status = if (all(curve$curve_status == "PASS")) "PASS" else "WATCH",
+    stringsAsFactors = FALSE
+  )
+  manifest <- data.frame()
+  if (isTRUE(write_output)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    curve_path <- file.path(output_dir, paste0("rb_wow_week1_usage_curve_audit_", prediction_season, ".csv"))
+    finish_curve_path <- file.path(output_dir, "rb_wow_week1_actual_finish_curve_2023_2025.csv")
+    individual_path <- file.path(output_dir, paste0("rb_wow_week1_individual_usage_audit_", prediction_season, ".csv"))
+    role_path <- file.path(output_dir, paste0("rb_wow_week1_depth_opportunity_audit_", prediction_season, ".csv"))
+    summary_path <- file.path(output_dir, paste0("rb_wow_week1_usage_audit_summary_", prediction_season, ".csv"))
+    utils::write.csv(curve, curve_path, row.names = FALSE, na = "")
+    utils::write.csv(finish_curve, finish_curve_path, row.names = FALSE, na = "")
+    utils::write.csv(individual, individual_path, row.names = FALSE, na = "")
+    utils::write.csv(role, role_path, row.names = FALSE, na = "")
+    utils::write.csv(summary, summary_path, row.names = FALSE, na = "")
+    manifest <- data.frame(
+      artifact = c(
+        "rb_usage_curve_audit", "rb_actual_finish_curve", "rb_individual_usage_audit",
+        "rb_depth_opportunity_audit", "rb_usage_audit_summary"
+      ),
+      output_path = c(curve_path, finish_curve_path, individual_path, role_path, summary_path),
+      exists = file.exists(c(curve_path, finish_curve_path, individual_path, role_path, summary_path)),
+      stringsAsFactors = FALSE
+    )
+  }
+  result <- list(
+    summary = summary,
+    curve = curve,
+    finish_curve = finish_curve,
+    individual = individual,
+    role = role,
+    manifest = manifest
+  )
+  assign("rb_wow_week1_usage_audit", result, envir = .GlobalEnv)
+  result
+}
+
+wow_week1_wr_rank_bucket <- function(rank) {
+  as.character(cut(
+    suppressWarnings(as.numeric(rank)),
+    breaks = c(0, 12, 24, 36, 48, 60, 84, 120, Inf),
+    labels = c("1-12", "13-24", "25-36", "37-48", "49-60", "61-84", "85-120", "121+"),
+    right = TRUE
+  ))
+}
+
+build_wr_wow_week1_usage_audit <- function(
+    projections,
+    prediction_season = 2026L,
+    historical_test_seasons = 2023:2025,
+    write_output = TRUE,
+    output_dir = file.path(
+      model_paths$model_root_dir,
+      "outputs", "editor", "week_over_week",
+      as.character(prediction_season), "week_1"
+    )
+) {
+  load_model_core_packages()
+  wr_current <- projections |>
+    dplyr::filter(.data$position == "WR") |>
+    dplyr::mutate(
+      player_key = make_player_key(.data$player),
+      rank_bucket = wow_week1_wr_rank_bucket(.data$rank)
+    )
+  frame <- wow_read_historical_sos_week1_board("WR")
+  actual_long <- wow_read_week1_actual_stats("WR", seasons = historical_test_seasons)
+  actual_wide <- reshape(
+    as.data.frame(actual_long),
+    idvar = c("position", "test_season", "player_key"),
+    timevar = "stat",
+    direction = "wide"
+  )
+  names(actual_wide) <- sub("actual_week1\\.", "actual_", names(actual_wide))
+  participation <- wow_read_week1_participation("WR", historical_test_seasons)
+  finish_curve <- build_wow_week1_actual_finish_curve("WR", historical_test_seasons)
+  selected_model <- run_position_wow_week1_backtest("WR")$selected_model
+  historical_rows <- list()
+  row_index <- 1L
+  for (test_season in historical_test_seasons) {
+    train <- frame[!is.na(frame$season) & frame$season < test_season, , drop = FALSE]
+    test <- frame[!is.na(frame$season) & frame$season == test_season, , drop = FALSE]
+    if (nrow(train) < 25L || nrow(test) == 0L) next
+    score <- wow_week1_candidate_scores(train, test)[[selected_model]]
+    test$projected_rank <- rank(-score, ties.method = "first", na.last = "keep")
+    test$rank_bucket <- wow_week1_wr_rank_bucket(test$projected_rank)
+    historical_rows[[row_index]] <- test |>
+      dplyr::left_join(
+        actual_wide,
+        by = c("position", "season" = "test_season", "player_key")
+      ) |>
+      dplyr::left_join(participation, by = c("season", "player_key"))
+    row_index <- row_index + 1L
+  }
+  historical_detail <- dplyr::bind_rows(historical_rows) |>
+    dplyr::filter(.data$projected_rank <= 120L) |>
+    dplyr::mutate(
+      actual_targets = dplyr::coalesce(.data$actual_targets, 0),
+      actual_receptions = dplyr::coalesce(.data$actual_receptions, 0),
+      actual_receiving_yards = dplyr::coalesce(.data$actual_receiving_yards, 0),
+      actual_receiving_td = dplyr::coalesce(.data$actual_receiving_td, 0),
+      actual_air_yards = dplyr::coalesce(.data$actual_air_yards, 0),
+      actual_first_read_targets = dplyr::coalesce(.data$actual_first_read_targets, 0),
+      actual_end_zone_targets = dplyr::coalesce(.data$actual_end_zone_targets, 0),
+      actual_receiving_first_downs = dplyr::coalesce(.data$actual_receiving_first_downs, 0),
+      actual_rush_attempts = dplyr::coalesce(.data$actual_rush_attempts, 0),
+      actual_rush_yards = dplyr::coalesce(.data$actual_rush_yards, 0),
+      actual_rush_td = dplyr::coalesce(.data$actual_rush_td, 0),
+      actual_scrimmage_yards = dplyr::coalesce(.data$actual_scrimmage_yards, 0),
+      actual_total_td = dplyr::coalesce(.data$actual_total_td, 0),
+      actual_week1_fp = dplyr::coalesce(.data$actual_week1_fp, 0),
+      actual_participated = dplyr::coalesce(.data$actual_participated, FALSE)
+    )
+  historical_activity <- historical_detail |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      historical_forecast_rows = dplyr::n(),
+      historical_active_rows = sum(.data$actual_participated),
+      historical_inactive_rows = sum(!.data$actual_participated),
+      historical_active_rate = mean(.data$actual_participated),
+      historical_all_row_avg_fantasy_points = mean(.data$actual_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    )
+  historical <- historical_detail |>
+    dplyr::filter(.data$actual_participated) |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      historical_seasons = dplyr::n_distinct(.data$season),
+      historical_rows = dplyr::n(),
+      historical_avg_targets = mean(.data$actual_targets, na.rm = TRUE),
+      historical_avg_receptions = mean(.data$actual_receptions, na.rm = TRUE),
+      historical_avg_receiving_yards = mean(.data$actual_receiving_yards, na.rm = TRUE),
+      historical_avg_receiving_td = mean(.data$actual_receiving_td, na.rm = TRUE),
+      historical_avg_air_yards = mean(.data$actual_air_yards, na.rm = TRUE),
+      historical_avg_first_read_targets = mean(.data$actual_first_read_targets, na.rm = TRUE),
+      historical_avg_end_zone_targets = mean(.data$actual_end_zone_targets, na.rm = TRUE),
+      historical_avg_receiving_first_downs = mean(.data$actual_receiving_first_downs, na.rm = TRUE),
+      historical_avg_rush_attempts = mean(.data$actual_rush_attempts, na.rm = TRUE),
+      historical_avg_rush_yards = mean(.data$actual_rush_yards, na.rm = TRUE),
+      historical_avg_scrimmage_yards = mean(.data$actual_scrimmage_yards, na.rm = TRUE),
+      historical_avg_total_td = mean(.data$actual_total_td, na.rm = TRUE),
+      historical_avg_fantasy_points = mean(.data$actual_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    dplyr::left_join(historical_activity, by = "rank_bucket")
+  current <- wr_current |>
+    dplyr::filter(.data$rank <= 120L) |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      current_rows = dplyr::n(),
+      current_avg_targets = mean(.data$projected_week1_targets, na.rm = TRUE),
+      current_avg_receptions = mean(.data$projected_week1_receptions, na.rm = TRUE),
+      current_avg_receiving_yards = mean(.data$projected_week1_receiving_yards, na.rm = TRUE),
+      current_avg_receiving_td = mean(.data$projected_week1_receiving_td, na.rm = TRUE),
+      current_avg_air_yards = mean(.data$projected_week1_air_yards, na.rm = TRUE),
+      current_avg_first_read_targets = mean(.data$projected_week1_first_read_targets, na.rm = TRUE),
+      current_avg_end_zone_targets = mean(.data$projected_week1_end_zone_targets, na.rm = TRUE),
+      current_avg_receiving_first_downs = mean(.data$projected_week1_receiving_first_downs, na.rm = TRUE),
+      current_avg_rush_attempts = mean(.data$projected_week1_rush_attempts, na.rm = TRUE),
+      current_avg_rush_yards = mean(.data$projected_week1_rush_yards, na.rm = TRUE),
+      current_avg_scrimmage_yards = mean(.data$projected_week1_scrimmage_yards, na.rm = TRUE),
+      current_avg_total_td = mean(.data$projected_week1_total_td, na.rm = TRUE),
+      current_avg_fantasy_points = mean(.data$projected_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    )
+  curve <- dplyr::left_join(historical, current, by = "rank_bucket") |>
+    dplyr::mutate(
+      rank_bucket_order = match(
+        .data$rank_bucket,
+        c("1-12", "13-24", "25-36", "37-48", "49-60", "61-84", "85-120")
+      )
+    ) |>
+    dplyr::arrange(.data$rank_bucket_order) |>
+    dplyr::mutate(
+      historical_rank_coherent_fantasy_points = -stats::isoreg(
+        seq_along(.data$historical_avg_fantasy_points),
+        -.data$historical_avg_fantasy_points
+      )$yf,
+      historical_fp_rank_order_violation =
+        .data$historical_avg_fantasy_points >
+          dplyr::lag(.data$historical_avg_fantasy_points, default = Inf),
+      target_ratio = .data$current_avg_targets / .data$historical_avg_targets,
+      reception_ratio = .data$current_avg_receptions / .data$historical_avg_receptions,
+      receiving_yard_ratio = .data$current_avg_receiving_yards / .data$historical_avg_receiving_yards,
+      air_yard_ratio = .data$current_avg_air_yards / .data$historical_avg_air_yards,
+      first_read_target_ratio = .data$current_avg_first_read_targets / .data$historical_avg_first_read_targets,
+      end_zone_target_ratio = .data$current_avg_end_zone_targets / .data$historical_avg_end_zone_targets,
+      scrimmage_yard_ratio = .data$current_avg_scrimmage_yards / .data$historical_avg_scrimmage_yards,
+      fantasy_point_ratio = .data$current_avg_fantasy_points / .data$historical_avg_fantasy_points,
+      rank_coherent_fantasy_point_ratio =
+        .data$current_avg_fantasy_points / .data$historical_rank_coherent_fantasy_points,
+      curve_status = dplyr::if_else(
+        .data$target_ratio >= 0.75 & .data$target_ratio <= 1.25 &
+          .data$reception_ratio >= 0.75 & .data$reception_ratio <= 1.25 &
+          .data$receiving_yard_ratio >= 0.70 & .data$receiving_yard_ratio <= 1.30 &
+          .data$scrimmage_yard_ratio >= 0.70 & .data$scrimmage_yard_ratio <= 1.30 &
+          .data$fantasy_point_ratio >= 0.70 & .data$fantasy_point_ratio <= 1.30,
+        "PASS", "WATCH"
+      )
+    )
+  weekly <- utils::read.csv(
+    wow_week1_actual_stat_path("WR"),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  recent_profile <- weekly |>
+    dplyr::filter(.data$season %in% 2023:2025, .data$targets > 0) |>
+    dplyr::group_by(.data$player_key) |>
+    dplyr::summarise(
+      profile_games = dplyr::n(),
+      historical_targets_per_game = mean(.data$targets, na.rm = TRUE),
+      historical_receptions_per_game = mean(.data$receptions, na.rm = TRUE),
+      historical_receiving_yards_per_game = mean(.data$receiving_yards, na.rm = TRUE),
+      historical_air_yards_per_game = mean(.data$air_yards, na.rm = TRUE),
+      historical_first_read_targets_per_game = mean(.data$first_read_targets, na.rm = TRUE),
+      historical_end_zone_targets_per_game = mean(.data$end_zone_targets, na.rm = TRUE),
+      historical_scrimmage_yards_per_game = mean(.data$scrimmage_yards, na.rm = TRUE),
+      historical_total_td_per_game = mean(.data$total_td, na.rm = TRUE),
+      .groups = "drop"
+    )
+  individual <- wr_current |>
+    dplyr::filter(.data$rank <= 120L) |>
+    dplyr::left_join(recent_profile, by = "player_key") |>
+    dplyr::mutate(
+      target_profile_ratio = .data$projected_week1_targets / .data$historical_targets_per_game,
+      reception_profile_ratio = .data$projected_week1_receptions / .data$historical_receptions_per_game,
+      receiving_yard_profile_ratio = .data$projected_week1_receiving_yards / .data$historical_receiving_yards_per_game,
+      air_yard_profile_ratio = .data$projected_week1_air_yards / .data$historical_air_yards_per_game,
+      profile_status = dplyr::case_when(
+        is.na(.data$profile_games) | .data$profile_games < 4L ~ "limited_or_new_profile",
+        .data$target_profile_ratio < 0.60 | .data$target_profile_ratio > 1.40 |
+          .data$reception_profile_ratio < 0.60 | .data$reception_profile_ratio > 1.40 |
+          .data$receiving_yard_profile_ratio < 0.60 | .data$receiving_yard_profile_ratio > 1.40 |
+          .data$air_yard_profile_ratio < 0.50 | .data$air_yard_profile_ratio > 1.50 ~ "WATCH",
+        TRUE ~ "PASS"
+      )
+    ) |>
+    dplyr::select(
+      "rank", "player", "team", "opponent", "week1_depth_team",
+      "projected_week1_fp", "projected_week1_targets", "projected_week1_receptions",
+      "projected_week1_receiving_yards", "projected_week1_receiving_td",
+      "projected_week1_air_yards", "projected_week1_first_read_targets",
+      "projected_week1_end_zone_targets", "projected_week1_receiving_first_downs",
+      "projected_week1_rush_attempts", "projected_week1_rush_yards",
+      "projected_week1_rush_td", "projected_week1_scrimmage_yards",
+      "projected_week1_total_td", "profile_games",
+      "historical_targets_per_game", "historical_receptions_per_game",
+      "historical_receiving_yards_per_game", "historical_air_yards_per_game",
+      "historical_first_read_targets_per_game", "historical_end_zone_targets_per_game",
+      "historical_scrimmage_yards_per_game", "historical_total_td_per_game",
+      "target_profile_ratio", "reception_profile_ratio",
+      "receiving_yard_profile_ratio", "air_yard_profile_ratio", "profile_status"
+    ) |>
+    dplyr::arrange(.data$rank)
+  summary <- data.frame(
+    position = "WR",
+    prediction_season = as.integer(prediction_season),
+    curve_buckets = nrow(curve),
+    curve_buckets_passed = sum(curve$curve_status == "PASS", na.rm = TRUE),
+    individual_profiles_checked = sum(individual$profile_status != "limited_or_new_profile", na.rm = TRUE),
+    individual_profile_watch_rows = sum(individual$profile_status == "WATCH", na.rm = TRUE),
+    status = if (all(curve$curve_status == "PASS")) "PASS" else "WATCH",
+    stringsAsFactors = FALSE
+  )
+  manifest <- data.frame()
+  if (isTRUE(write_output)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    curve_path <- file.path(output_dir, paste0("wr_wow_week1_usage_curve_audit_", prediction_season, ".csv"))
+    finish_curve_path <- file.path(output_dir, "wr_wow_week1_actual_finish_curve_2023_2025.csv")
+    individual_path <- file.path(output_dir, paste0("wr_wow_week1_individual_usage_audit_", prediction_season, ".csv"))
+    summary_path <- file.path(output_dir, paste0("wr_wow_week1_usage_audit_summary_", prediction_season, ".csv"))
+    utils::write.csv(curve, curve_path, row.names = FALSE, na = "")
+    utils::write.csv(finish_curve, finish_curve_path, row.names = FALSE, na = "")
+    utils::write.csv(individual, individual_path, row.names = FALSE, na = "")
+    utils::write.csv(summary, summary_path, row.names = FALSE, na = "")
+    manifest <- data.frame(
+      artifact = c(
+        "wr_usage_curve_audit", "wr_actual_finish_curve",
+        "wr_individual_usage_audit", "wr_usage_audit_summary"
+      ),
+      output_path = c(curve_path, finish_curve_path, individual_path, summary_path),
+      exists = file.exists(c(curve_path, finish_curve_path, individual_path, summary_path)),
+      stringsAsFactors = FALSE
+    )
+  }
+  result <- list(
+    summary = summary,
+    curve = curve,
+    finish_curve = finish_curve,
+    individual = individual,
+    manifest = manifest
+  )
+  assign("wr_wow_week1_usage_audit", result, envir = .GlobalEnv)
+  result
+}
+
+wow_rb_week1_context_overrides <- function(prediction_season = 2026L) {
+  data.frame(
+    prediction_season = rep(as.integer(prediction_season), 5L),
+    player_key = make_player_key(c(
+      "Zach Charbonnet", "Tyler Allgeier", "James Conner",
+      "Nicholas Singleton", "Keaton Mitchell"
+    )),
+    rb_week1_context_type = c(
+      "availability", "early_season_role", "reduced_role",
+      "depth_chart", "complementary_role"
+    ),
+    rb_week1_context_multiplier = c(0.10, 1.35, 0.65, 0.70, 1.50),
+    rb_week1_context_note = c(
+      "Likely unavailable for Week 1; retain a small probability-weighted projection until confirmed out.",
+      "Expected to have a larger early-season role than the unadjusted projection implies.",
+      "Expected to open with a smaller role than the unadjusted projection implies.",
+      "Expected to open third on the depth chart; reduce Week 1 opportunity.",
+      "Expected to complement Omarion Hampton in Week 1; increase expected opportunity."
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+wow_apply_rb_week1_context <- function(
+    projections,
+    prediction_season = 2026L,
+    context = wow_rb_week1_context_overrides(prediction_season)
+) {
+  load_model_core_packages()
+  if (!is.data.frame(projections) || nrow(projections) == 0L) {
+    stop("RB Week 1 context requires non-empty projections.", call. = FALSE)
+  }
+  context <- context |>
+    dplyr::filter(.data$prediction_season == as.integer(prediction_season)) |>
+    dplyr::distinct(.data$player_key, .keep_all = TRUE)
+  rb <- projections |>
+    dplyr::filter(.data$position == "RB") |>
+    dplyr::mutate(
+      player_key = dplyr::coalesce(as.character(.data$player_key), make_player_key(.data$player)),
+      rb_pre_week1_context_rank = .data$rank,
+      rb_pre_week1_context_fp = .data$projected_week1_fp
+    ) |>
+    dplyr::left_join(
+      dplyr::select(context, -dplyr::all_of("prediction_season")),
+      by = "player_key"
+    ) |>
+    dplyr::mutate(
+      rb_week1_context_multiplier = dplyr::coalesce(.data$rb_week1_context_multiplier, 1),
+      rb_week1_context_applied = .data$rb_week1_context_multiplier != 1
+    )
+  scalable_stats <- c(
+    "rush_attempts", "rush_yards", "rush_td", "targets", "receptions",
+    "receiving_yards", "receiving_td"
+  )
+  for (stat_name in scalable_stats) {
+    column <- paste0("projected_week1_", stat_name)
+    rb[[column]] <- pmax(
+      wow_prob_num(rb[[column]]) * rb$rb_week1_context_multiplier,
+      0
+    )
+  }
+  rb <- wow_rebuild_week1_derived_stats(rb, "RB")
+  rb$stat_implied_week1_fp_after <- wow_week1_implied_points(rb, "RB")
+  rb$projected_week1_fp <- rb$stat_implied_week1_fp_after
+  rb$stat_projection_delta_vs_model <- rb$projected_week1_fp - rb$model_projected_week1_fp
+  rb$stat_projection_gap_after <- rb$projected_week1_fp - rb$stat_implied_week1_fp_after
+  rb <- rb |>
+    dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+    dplyr::mutate(
+      rank = dplyr::row_number(),
+      tier = wow_week1_tier("RB", .data$rank),
+      final_score = .data$projected_week1_fp
+    )
+  probability_columns <- intersect(
+    paste0("prob_week_", names(wow_prob_targets("RB"))),
+    names(rb)
+  )
+  for (column in probability_columns) {
+    rb[[column]] <- sort(wow_prob_num(rb[[column]]), decreasing = TRUE, na.last = TRUE)
+  }
+  unmatched_context <- dplyr::anti_join(
+    context,
+    dplyr::distinct(rb, .data$player_key),
+    by = "player_key"
+  )
+  audit <- rb |>
+    dplyr::filter(.data$rb_week1_context_applied) |>
+    dplyr::transmute(
+      prediction_season = as.integer(prediction_season),
+      player = .data$player,
+      team = .data$team,
+      rank_before = .data$rb_pre_week1_context_rank,
+      rank_after = .data$rank,
+      projected_week1_fp_before = .data$rb_pre_week1_context_fp,
+      projected_week1_fp_after = .data$projected_week1_fp,
+      rb_week1_context_type = .data$rb_week1_context_type,
+      rb_week1_context_multiplier = .data$rb_week1_context_multiplier,
+      rb_week1_context_note = .data$rb_week1_context_note,
+      status = dplyr::if_else(
+        is.finite(.data$rb_week1_context_multiplier) &
+          .data$rb_week1_context_multiplier >= 0 &
+          .data$rb_week1_context_multiplier <= 1.50,
+        "PASS", "FAIL"
+      )
+    ) |>
+    dplyr::arrange(.data$rank_after)
+  if (nrow(unmatched_context) > 0L || any(audit$status != "PASS")) {
+    stop("RB Week 1 context audit failed.", call. = FALSE)
+  }
+  out <- dplyr::bind_rows(
+    dplyr::filter(projections, .data$position != "RB"),
+    rb
+  ) |>
+    dplyr::arrange(.data$position, .data$rank)
+  list(projections = out, audit = audit, context = context)
+}
+
+wow_apply_rb_week1_historical_curve <- function(
+    projections,
+    curve,
+    min_multiplier = 0.20,
+    max_multiplier = 1.30,
+    reserve_opportunity_cap = 1.15,
+    reserve_points_cap = 0.98
+) {
+  load_model_core_packages()
+  if (!is.data.frame(projections) || !is.data.frame(curve) || nrow(curve) == 0L) {
+    stop("RB historical calibration requires projections and a curve audit.", call. = FALSE)
+  }
+  factor_table <- curve |>
+    dplyr::transmute(
+      rb_historical_curve_bucket = as.character(.data$rank_bucket),
+      rb_historical_curve_midpoint = dplyr::case_when(
+        .data$rank_bucket == "1-12" ~ 6.5,
+        .data$rank_bucket == "13-24" ~ 18.5,
+        .data$rank_bucket == "25-36" ~ 30.5,
+        .data$rank_bucket == "37-48" ~ 42.5,
+        .data$rank_bucket == "49-60" ~ 54.5,
+        .data$rank_bucket == "61-100" ~ 80.5,
+        TRUE ~ NA_real_
+      ),
+      rb_historical_curve_raw_multiplier =
+        .data$historical_avg_fantasy_points / pmax(.data$current_avg_fantasy_points, 0.1),
+      rb_historical_curve_bucket_multiplier = pmax(
+        pmin(.data$rb_historical_curve_raw_multiplier, max_multiplier),
+        min_multiplier
+      )
+    ) |>
+    dplyr::filter(is.finite(.data$rb_historical_curve_midpoint)) |>
+    dplyr::arrange(.data$rb_historical_curve_midpoint)
+  tail_multiplier <- factor_table |>
+    dplyr::filter(.data$rb_historical_curve_bucket == "61-100") |>
+    dplyr::slice_head(n = 1L)
+  if (nrow(tail_multiplier) == 0L) {
+    tail_multiplier <- data.frame(
+      rb_historical_curve_bucket = "61-100",
+      rb_historical_curve_midpoint = 80.5,
+      rb_historical_curve_raw_multiplier = min_multiplier,
+      rb_historical_curve_bucket_multiplier = min_multiplier,
+      stringsAsFactors = FALSE
+    )
+  }
+  rb <- projections |>
+    dplyr::filter(.data$position == "RB") |>
+    dplyr::mutate(
+      rb_historical_curve_bucket = wow_week1_rb_rank_bucket(.data$rank),
+      rb_historical_curve_bucket = dplyr::if_else(
+        .data$rb_historical_curve_bucket == "101+",
+        "61-100",
+        .data$rb_historical_curve_bucket
+      ),
+      rb_pre_historical_curve_rank = .data$rank,
+      rb_pre_historical_curve_fp = .data$projected_week1_fp
+    ) |>
+    dplyr::left_join(factor_table, by = "rb_historical_curve_bucket") |>
+    dplyr::mutate(
+      rb_historical_curve_raw_multiplier = dplyr::coalesce(
+        .data$rb_historical_curve_raw_multiplier,
+        tail_multiplier$rb_historical_curve_raw_multiplier[[1]]
+      ),
+      rb_historical_curve_bucket_multiplier = dplyr::coalesce(
+        .data$rb_historical_curve_bucket_multiplier,
+        tail_multiplier$rb_historical_curve_bucket_multiplier[[1]]
+      ),
+      rb_historical_curve_multiplier = pmax(
+        pmin(
+          stats::approx(
+            x = factor_table$rb_historical_curve_midpoint,
+            y = factor_table$rb_historical_curve_bucket_multiplier,
+            xout = .data$rb_pre_historical_curve_rank,
+            rule = 2
+          )$y,
+          max_multiplier
+        ),
+        min_multiplier
+      )
+    )
+  scalable_stats <- c(
+    "rush_attempts", "rush_yards", "rush_td", "targets", "receptions",
+    "receiving_yards", "receiving_td"
+  )
+  for (stat_name in scalable_stats) {
+    column <- paste0("projected_week1_", stat_name)
+    rb[[column]] <- pmax(
+      wow_prob_num(rb[[column]]) * rb$rb_historical_curve_multiplier,
+      0
+    )
+  }
+  rb <- wow_rebuild_week1_derived_stats(rb, "RB")
+  rb$rb_pre_depth_guardrail_fp <- wow_week1_implied_points(rb, "RB")
+  rb <- rb |>
+    dplyr::group_by(.data$team) |>
+    dplyr::group_modify(~ {
+      rows <- .x
+      rows$rb_depth_guardrail_multiplier <- 1
+      rows$rb_depth_guardrail_reference_opportunities <- NA_real_
+      rows$rb_depth_guardrail_reference_fp <- NA_real_
+      rows$rb_depth_guardrail_applied <- FALSE
+      depth <- wow_prob_num(rows$week1_depth_team)
+      for (i in seq_len(nrow(rows))) {
+        if (!is.finite(depth[[i]]) || depth[[i]] < 3L) next
+        shallower <- which(is.finite(depth) & depth == depth[[i]] - 1L)
+        if (length(shallower) == 0L) next
+        reference_opportunities <- min(
+          wow_prob_num(rows$projected_week1_opportunities[shallower]),
+          na.rm = TRUE
+        )
+        reference_fp <- max(
+          wow_prob_num(rows$rb_pre_depth_guardrail_fp[shallower]),
+          na.rm = TRUE
+        )
+        opportunity_factor <- if (
+          is.finite(reference_opportunities) &
+            rows$projected_week1_opportunities[[i]] > 0
+        ) {
+          min(
+            1,
+            reserve_opportunity_cap * reference_opportunities /
+              rows$projected_week1_opportunities[[i]]
+          )
+        } else {
+          1
+        }
+        points_factor <- if (
+          is.finite(reference_fp) & rows$rb_pre_depth_guardrail_fp[[i]] > 0
+        ) {
+          min(
+            1,
+            reserve_points_cap * reference_fp / rows$rb_pre_depth_guardrail_fp[[i]]
+          )
+        } else {
+          1
+        }
+        rows$rb_depth_guardrail_reference_opportunities[[i]] <- reference_opportunities
+        rows$rb_depth_guardrail_reference_fp[[i]] <- reference_fp
+        rows$rb_depth_guardrail_multiplier[[i]] <- min(opportunity_factor, points_factor)
+        rows$rb_depth_guardrail_applied[[i]] <- rows$rb_depth_guardrail_multiplier[[i]] < 1 - 1e-9
+      }
+      rows
+    }) |>
+    dplyr::ungroup()
+  for (stat_name in scalable_stats) {
+    column <- paste0("projected_week1_", stat_name)
+    rb[[column]] <- pmax(
+      wow_prob_num(rb[[column]]) * rb$rb_depth_guardrail_multiplier,
+      0
+    )
+  }
+  rb <- wow_rebuild_week1_derived_stats(rb, "RB")
+  rb$rb_total_calibration_multiplier <-
+    rb$rb_historical_curve_multiplier * rb$rb_depth_guardrail_multiplier
+  rb$stat_implied_week1_fp_after <- wow_week1_implied_points(rb, "RB")
+  rb$projected_week1_fp <- rb$stat_implied_week1_fp_after
+  rb$stat_projection_delta_vs_model <- rb$projected_week1_fp - rb$model_projected_week1_fp
+  rb$stat_projection_gap_after <- rb$projected_week1_fp - rb$stat_implied_week1_fp_after
+  rb <- rb |>
+    dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+    dplyr::mutate(
+      rank = dplyr::row_number(),
+      tier = wow_week1_tier("RB", .data$rank),
+      final_score = .data$projected_week1_fp
+    )
+  probability_columns <- intersect(
+    paste0("prob_week_", names(wow_prob_targets("RB"))),
+    names(rb)
+  )
+  for (column in probability_columns) {
+    rb[[column]] <- sort(wow_prob_num(rb[[column]]), decreasing = TRUE, na.last = TRUE)
+  }
+  out <- dplyr::bind_rows(
+    dplyr::filter(projections, .data$position != "RB"),
+    rb
+  ) |>
+    dplyr::arrange(.data$position, .data$rank)
+  calibration_audit <- rb |>
+    dplyr::transmute(
+      rank = .data$rank,
+      rb_pre_historical_curve_rank = .data$rb_pre_historical_curve_rank,
+      player = .data$player,
+      team = .data$team,
+      week1_depth_team = .data$week1_depth_team,
+      rb_historical_curve_bucket = .data$rb_historical_curve_bucket,
+      rb_historical_curve_raw_multiplier = .data$rb_historical_curve_raw_multiplier,
+      rb_historical_curve_bucket_multiplier = .data$rb_historical_curve_bucket_multiplier,
+      rb_historical_curve_multiplier = .data$rb_historical_curve_multiplier,
+      rb_depth_guardrail_multiplier = .data$rb_depth_guardrail_multiplier,
+      rb_depth_guardrail_applied = .data$rb_depth_guardrail_applied,
+      rb_total_calibration_multiplier = .data$rb_total_calibration_multiplier,
+      rb_pre_historical_curve_fp = .data$rb_pre_historical_curve_fp,
+      projected_week1_fp = .data$projected_week1_fp,
+      min_multiplier = min_multiplier,
+      max_multiplier = max_multiplier,
+      status = dplyr::if_else(
+        is.finite(.data$rb_historical_curve_multiplier) &
+          .data$rb_historical_curve_multiplier >= min_multiplier &
+          .data$rb_historical_curve_multiplier <= max_multiplier &
+          is.finite(.data$rb_depth_guardrail_multiplier) &
+          .data$rb_depth_guardrail_multiplier > 0 &
+          .data$rb_depth_guardrail_multiplier <= 1,
+        "PASS", "FAIL"
+      )
+    )
+  list(projections = out, audit = calibration_audit, curve_targets = factor_table)
+}
+
+wow_refine_wr_week1_historical_stats <- function(
+    wr,
+    curve,
+    iterations = 6L,
+    blend_weight = 0.55
+) {
+  midpoint_map <- c(
+    "1-12" = 6.5, "13-24" = 18.5, "25-36" = 30.5,
+    "37-48" = 42.5, "49-60" = 54.5, "61-84" = 72.5,
+    "85-120" = 102.5
+  )
+  calibration_stats <- c(
+    "targets", "receptions", "receiving_yards", "receiving_td", "air_yards",
+    "first_read_targets", "end_zone_targets", "receiving_first_downs",
+    "rush_attempts", "rush_yards", "rush_td"
+  )
+  sparse_stats <- c("receiving_td", "end_zone_targets", "rush_td")
+  rushing_stats <- c("rush_attempts", "rush_yards")
+  wr$wr_refinement_min_stat_multiplier <- 1
+  wr$wr_refinement_max_stat_multiplier <- 1
+  for (iteration in seq_len(as.integer(iterations))) {
+    wr <- wr |>
+      dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+      dplyr::mutate(
+        rank = dplyr::row_number(),
+        wr_refinement_bucket = wow_week1_wr_rank_bucket(.data$rank)
+      )
+    row_factors <- list()
+    for (stat_name in calibration_stats) {
+      projected_column <- paste0("projected_week1_", stat_name)
+      historical_column <- paste0("historical_avg_", stat_name)
+      if (!projected_column %in% names(wr) || !historical_column %in% names(curve)) next
+      current_means <- vapply(names(midpoint_map), function(bucket) {
+        values <- wow_prob_num(wr[[projected_column]][wr$wr_refinement_bucket == bucket])
+        if (length(values) == 0L || !any(is.finite(values))) NA_real_ else mean(values, na.rm = TRUE)
+      }, numeric(1))
+      historical_means <- wow_prob_num(curve[[historical_column]][
+        match(names(midpoint_map), as.character(curve$rank_bucket))
+      ])
+      if (all(is.finite(historical_means))) {
+        historical_means <- -stats::isoreg(
+          seq_along(historical_means),
+          -historical_means
+        )$yf
+      }
+      raw_factor <- historical_means / pmax(current_means, 1e-6)
+      raw_factor[!is.finite(raw_factor) | historical_means <= 1e-6] <- 1
+      stat_blend <- if (stat_name %in% sparse_stats) 0.45 else blend_weight
+      lower <- if (stat_name %in% sparse_stats) 0.88 else if (stat_name %in% rushing_stats) 0.90 else 0.85
+      upper <- if (stat_name %in% sparse_stats) 1.12 else if (stat_name %in% rushing_stats) 1.10 else 1.18
+      bucket_factor <- pmax(pmin(1 + stat_blend * (raw_factor - 1), upper), lower)
+      factor <- stats::approx(
+        x = unname(midpoint_map),
+        y = bucket_factor,
+        xout = wr$rank,
+        rule = 2
+      )$y
+      row_factors[[stat_name]] <- factor
+    }
+    for (stat_name in names(row_factors)) {
+      projected_column <- paste0("projected_week1_", stat_name)
+      factor <- row_factors[[stat_name]]
+      wr[[projected_column]] <- pmax(wow_prob_num(wr[[projected_column]]) * factor, 0)
+      wr$wr_refinement_min_stat_multiplier <- pmin(
+        wr$wr_refinement_min_stat_multiplier,
+        factor,
+        na.rm = TRUE
+      )
+      wr$wr_refinement_max_stat_multiplier <- pmax(
+        wr$wr_refinement_max_stat_multiplier,
+        factor,
+        na.rm = TRUE
+      )
+    }
+    wr$projected_week1_receptions <- pmin(
+      wr$projected_week1_receptions,
+      wr$projected_week1_targets
+    )
+    wr$projected_week1_first_read_targets <- pmin(
+      wr$projected_week1_first_read_targets,
+      wr$projected_week1_targets
+    )
+    wr$projected_week1_end_zone_targets <- pmin(
+      wr$projected_week1_end_zone_targets,
+      wr$projected_week1_targets
+    )
+    wr$projected_week1_receiving_first_downs <- pmin(
+      wr$projected_week1_receiving_first_downs,
+      wr$projected_week1_receptions
+    )
+    wr <- wow_rebuild_week1_derived_stats(wr, "WR")
+    wr$stat_implied_week1_fp_after <- wow_week1_implied_points(wr, "WR")
+    wr$projected_week1_fp <- wr$stat_implied_week1_fp_after
+    wr$stat_projection_delta_vs_model <- wr$projected_week1_fp - wr$model_projected_week1_fp
+    wr$stat_projection_gap_after <- wr$projected_week1_fp - wr$stat_implied_week1_fp_after
+  }
+  wr |>
+    dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+    dplyr::mutate(
+      rank = dplyr::row_number(),
+      tier = wow_week1_tier("WR", .data$rank),
+      final_score = .data$projected_week1_fp,
+      wr_refinement_iterations = as.integer(iterations)
+    )
+}
+
+wow_apply_wr_week1_historical_curve <- function(
+    projections,
+    curve,
+    blend_weight = 0.80,
+    min_multiplier = 0.60,
+    max_multiplier = 1.20
+) {
+  load_model_core_packages()
+  if (!is.data.frame(projections) || !is.data.frame(curve) || nrow(curve) == 0L) {
+    stop("WR historical calibration requires projections and a curve audit.", call. = FALSE)
+  }
+  midpoint_map <- c(
+    "1-12" = 6.5, "13-24" = 18.5, "25-36" = 30.5,
+    "37-48" = 42.5, "49-60" = 54.5, "61-84" = 72.5,
+    "85-120" = 102.5
+  )
+  factor_table <- curve |>
+    dplyr::transmute(
+      wr_historical_curve_bucket = as.character(.data$rank_bucket),
+      wr_historical_curve_midpoint = unname(.env$midpoint_map[.data$rank_bucket]),
+      wr_historical_curve_raw_multiplier =
+        .data$historical_rank_coherent_fantasy_points /
+          pmax(.data$current_avg_fantasy_points, 0.1),
+      wr_historical_curve_blended_multiplier =
+        1 + blend_weight * (.data$wr_historical_curve_raw_multiplier - 1),
+      wr_historical_curve_bucket_multiplier = pmax(
+        pmin(.data$wr_historical_curve_blended_multiplier, max_multiplier),
+        min_multiplier
+      )
+    ) |>
+    dplyr::filter(is.finite(.data$wr_historical_curve_midpoint)) |>
+    dplyr::arrange(.data$wr_historical_curve_midpoint)
+  tail_multiplier <- factor_table |>
+    dplyr::filter(.data$wr_historical_curve_bucket == "85-120") |>
+    dplyr::slice_head(n = 1L)
+  if (nrow(tail_multiplier) == 0L) {
+    tail_multiplier <- data.frame(
+      wr_historical_curve_bucket = "85-120",
+      wr_historical_curve_midpoint = 102.5,
+      wr_historical_curve_raw_multiplier = min_multiplier,
+      wr_historical_curve_blended_multiplier = min_multiplier,
+      wr_historical_curve_bucket_multiplier = min_multiplier,
+      stringsAsFactors = FALSE
+    )
+  }
+  wr <- projections |>
+    dplyr::filter(.data$position == "WR") |>
+    dplyr::mutate(
+      wr_historical_curve_bucket = wow_week1_wr_rank_bucket(.data$rank),
+      wr_historical_curve_bucket = dplyr::if_else(
+        .data$wr_historical_curve_bucket == "121+",
+        "85-120",
+        .data$wr_historical_curve_bucket
+      ),
+      wr_pre_historical_curve_rank = .data$rank,
+      wr_pre_historical_curve_fp = .data$projected_week1_fp
+    ) |>
+    dplyr::left_join(factor_table, by = "wr_historical_curve_bucket") |>
+    dplyr::mutate(
+      wr_historical_curve_raw_multiplier = dplyr::coalesce(
+        .data$wr_historical_curve_raw_multiplier,
+        tail_multiplier$wr_historical_curve_raw_multiplier[[1]]
+      ),
+      wr_historical_curve_blended_multiplier = dplyr::coalesce(
+        .data$wr_historical_curve_blended_multiplier,
+        tail_multiplier$wr_historical_curve_blended_multiplier[[1]]
+      ),
+      wr_historical_curve_bucket_multiplier = dplyr::coalesce(
+        .data$wr_historical_curve_bucket_multiplier,
+        tail_multiplier$wr_historical_curve_bucket_multiplier[[1]]
+      ),
+      wr_historical_curve_multiplier = pmax(
+        pmin(
+          stats::approx(
+            x = factor_table$wr_historical_curve_midpoint,
+            y = factor_table$wr_historical_curve_bucket_multiplier,
+            xout = .data$wr_pre_historical_curve_rank,
+            rule = 2
+          )$y,
+          max_multiplier
+        ),
+        min_multiplier
+      )
+    )
+  scalable_stats <- c(
+    "targets", "receptions", "receiving_yards", "receiving_td", "air_yards",
+    "first_read_targets", "end_zone_targets", "receiving_first_downs",
+    "rush_attempts", "rush_yards", "rush_td"
+  )
+  for (stat_name in scalable_stats) {
+    column <- paste0("projected_week1_", stat_name)
+    wr[[column]] <- pmax(
+      wow_prob_num(wr[[column]]) * wr$wr_historical_curve_multiplier,
+      0
+    )
+  }
+  wr <- wow_rebuild_week1_derived_stats(wr, "WR")
+  wr$stat_implied_week1_fp_after <- wow_week1_implied_points(wr, "WR")
+  wr$projected_week1_fp <- wr$stat_implied_week1_fp_after
+  wr$stat_projection_delta_vs_model <- wr$projected_week1_fp - wr$model_projected_week1_fp
+  wr$stat_projection_gap_after <- wr$projected_week1_fp - wr$stat_implied_week1_fp_after
+  wr <- wr |>
+    dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+    dplyr::mutate(
+      rank = dplyr::row_number(),
+      tier = wow_week1_tier("WR", .data$rank),
+      final_score = .data$projected_week1_fp
+    )
+  wr <- wow_refine_wr_week1_historical_stats(wr, curve)
+  probability_columns <- intersect(
+    paste0("prob_week_", names(wow_prob_targets("WR"))),
+    names(wr)
+  )
+  for (column in probability_columns) {
+    wr[[column]] <- sort(wow_prob_num(wr[[column]]), decreasing = TRUE, na.last = TRUE)
+  }
+  out <- dplyr::bind_rows(
+    dplyr::filter(projections, .data$position != "WR"),
+    wr
+  ) |>
+    dplyr::arrange(.data$position, .data$rank)
+  calibration_audit <- wr |>
+    dplyr::transmute(
+      rank = .data$rank,
+      wr_pre_historical_curve_rank = .data$wr_pre_historical_curve_rank,
+      player = .data$player,
+      team = .data$team,
+      week1_depth_team = .data$week1_depth_team,
+      wr_historical_curve_bucket = .data$wr_historical_curve_bucket,
+      wr_historical_curve_raw_multiplier = .data$wr_historical_curve_raw_multiplier,
+      wr_historical_curve_blended_multiplier = .data$wr_historical_curve_blended_multiplier,
+      wr_historical_curve_bucket_multiplier = .data$wr_historical_curve_bucket_multiplier,
+      wr_historical_curve_multiplier = .data$wr_historical_curve_multiplier,
+      wr_refinement_iterations = .data$wr_refinement_iterations,
+      wr_refinement_min_stat_multiplier = .data$wr_refinement_min_stat_multiplier,
+      wr_refinement_max_stat_multiplier = .data$wr_refinement_max_stat_multiplier,
+      wr_pre_historical_curve_fp = .data$wr_pre_historical_curve_fp,
+      projected_week1_fp = .data$projected_week1_fp,
+      blend_weight = blend_weight,
+      min_multiplier = min_multiplier,
+      max_multiplier = max_multiplier,
+      stat_identity_gap = abs(
+        .data$projected_week1_fp - wow_week1_implied_points(wr, "WR")
+      ),
+      status = dplyr::if_else(
+        is.finite(.data$wr_historical_curve_multiplier) &
+          .data$wr_historical_curve_multiplier >= min_multiplier &
+          .data$wr_historical_curve_multiplier <= max_multiplier &
+          .data$stat_identity_gap <= 1e-8,
+        "PASS", "FAIL"
+      )
+    )
+  list(projections = out, audit = calibration_audit, curve_targets = factor_table)
+}
+
+wow_wr_week1_context_overrides <- function(prediction_season = 2026L) {
+  data.frame(
+    prediction_season = rep(as.integer(prediction_season), 16L),
+    player_key = make_player_key(c(
+      "Malik Nabers", "Rashee Rice", "Justin Jefferson", "Courtland Sutton",
+      "Jaylen Waddle", "Ladd McConkey", "A.J. Brown", "Emeka Egbuka",
+      "DeVonta Smith", "Chris Olave", "Tetairoa McMillan", "Nico Collins",
+      "Josh Downs", "Alec Pierce", "Mack Hollins", "DeMario Douglas"
+    )),
+    wr_week1_context_type = c(
+      "acl_return_risk", "matchup_downgrade", "elite_wr1_role", "team_wr2_role",
+      "team_wr1_role", "wr1_matchup_upgrade", "elite_wr1_role",
+      "game_script_matchup_upgrade", "game_script_matchup_upgrade",
+      "game_script_matchup_upgrade", "game_script_matchup_upgrade",
+      "elite_wr1_role", "conditional_week1_wr1", "conditional_availability_downgrade",
+      "deep_depth_chart_discount", "deep_depth_chart_discount"
+    ),
+    wr_week1_context_multiplier = c(
+      0.77, 0.94, 1.04, 0.96, 1.025, 1.04, 1.05,
+      1.03, 1.025, 1.025, 1.025, 1.035, 1.10, 0.80, 0.92, 0.90
+    ),
+    wr_expected_depth_team = c(
+      1L, 1L, 1L, 2L, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 2L, 5L, 6L
+    ),
+    wr_context_depth_override = c(
+      NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_,
+      NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_, 1L, 2L,
+      NA_integer_, NA_integer_
+    ),
+    wr_expected_min_rank = c(
+      13L, NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_,
+      NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_,
+      NA_integer_, NA_integer_
+    ),
+    wr_expected_max_rank = c(
+      NA_integer_, NA_integer_, 10L, NA_integer_, NA_integer_, NA_integer_, 15L,
+      NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_, NA_integer_,
+      NA_integer_, NA_integer_
+    ),
+    wr_context_adjusted_matchup_score_0to100 = c(
+      NA, 8, NA, NA, NA, 65, NA, 55, NA, NA, NA, NA, NA, NA, NA, NA
+    ),
+    wr_week1_context_note = c(
+      "Excellent Dallas matchup and a plausible Week 1 return, but keep him outside the top 12 because this is his first game back from ACL reconstruction.",
+      "Denver is already a poor modeled matchup; add a modest player-specific downgrade for Rice's historical difficulty in this matchup.",
+      "Confirmed Minnesota WR1 and elite target earner; restore enough volume to place him inside the Week 1 top 10.",
+      "Treat Sutton as Denver's WR2 behind Jaylen Waddle and reduce expected target share modestly.",
+      "Treat Waddle as Denver's WR1 and add a small target-share boost while preserving his depth-chart advantage over Sutton.",
+      "Chargers WR1 in a better Arizona matchup than the base opponent score indicates; increase expected Week 1 volume and production.",
+      "Elite New England WR1 target share should overcome part of the difficult Seattle matchup and place him inside the top 15.",
+      "Increase Egbuka's Week 1 expectation for a favorable Cincinnati game script and matchup without changing his ROS role.",
+      "Add a modest Week 1 game-script and matchup boost against Washington.",
+      "Add a modest Week 1 game-script and matchup boost against Detroit.",
+      "Add a modest Week 1 game-script and matchup boost against Chicago.",
+      "Preserve a higher elite-WR1 production expectation despite the difficult Buffalo matchup.",
+      "Assuming he remains healthier than Pierce, treat Downs as Indianapolis' Week 1 WR1 and increase expected target share.",
+      "Pierce remains an availability risk following ankle surgery and Active/PUP placement; treat him behind Downs for Week 1 only.",
+      "Apply a modest Week 1 discount because New England currently lists Hollins fifth on its wide-receiver depth chart.",
+      "Apply a modest Week 1 discount because New England currently lists Douglas sixth on its wide-receiver depth chart."
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+wow_enforce_wr_context_rank_guardrails <- function(wr, scalable_stats, max_passes = 3L) {
+  wr$wr_context_rank_guardrail_multiplier <- 1
+  for (guardrail_pass in seq_len(max_passes)) {
+    changed <- FALSE
+    for (row_index in seq_len(nrow(wr))) {
+      expected_max <- suppressWarnings(as.integer(wr$wr_expected_max_rank[[row_index]]))
+      expected_min <- suppressWarnings(as.integer(wr$wr_expected_min_rank[[row_index]]))
+      row_rank <- suppressWarnings(as.integer(wr$rank[[row_index]]))
+      if (!is.finite(row_rank)) next
+      peer_points <- sort(
+        wow_prob_num(wr$projected_week1_fp[-row_index]),
+        decreasing = TRUE,
+        na.last = NA
+      )
+      target_points <- NA_real_
+      if (!is.na(expected_max) && is.finite(expected_max) &&
+          row_rank > expected_max && length(peer_points) >= expected_max) {
+        target_points <- peer_points[[expected_max]] * 1.0001
+      }
+      if (!is.na(expected_min) && is.finite(expected_min) &&
+          row_rank < expected_min && length(peer_points) >= expected_min - 1L) {
+        target_points <- peer_points[[expected_min - 1L]] * 0.9999
+      }
+      current_points <- wow_prob_num(wr$projected_week1_fp[[row_index]])
+      if (!is.finite(target_points) || !is.finite(current_points) || current_points <= 0) next
+      guardrail_multiplier <- target_points / current_points
+      for (stat_name in scalable_stats) {
+        column <- paste0("projected_week1_", stat_name)
+        wr[[column]][[row_index]] <- pmax(
+          wow_prob_num(wr[[column]][[row_index]]) * guardrail_multiplier,
+          0
+        )
+      }
+      wr$wr_context_rank_guardrail_multiplier[[row_index]] <-
+        wr$wr_context_rank_guardrail_multiplier[[row_index]] * guardrail_multiplier
+      changed <- TRUE
+    }
+    if (!changed) break
+    wr <- wow_rebuild_week1_derived_stats(wr, "WR")
+    wr$stat_implied_week1_fp_after <- wow_week1_implied_points(wr, "WR")
+    wr$projected_week1_fp <- wr$stat_implied_week1_fp_after
+    wr$stat_projection_delta_vs_model <- wr$projected_week1_fp - wr$model_projected_week1_fp
+    wr$stat_projection_gap_after <- wr$projected_week1_fp - wr$stat_implied_week1_fp_after
+    wr <- wr |>
+      dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+      dplyr::mutate(
+        rank = dplyr::row_number(),
+        tier = wow_week1_tier("WR", .data$rank),
+        final_score = .data$projected_week1_fp
+      )
+  }
+  wr
+}
+
+wow_apply_wr_week1_context <- function(
+    projections,
+    prediction_season = 2026L,
+    context = wow_wr_week1_context_overrides(prediction_season)
+) {
+  load_model_core_packages()
+  wr <- projections |>
+    dplyr::filter(.data$position == "WR") |>
+    dplyr::mutate(
+      player_key = make_player_key(.data$player),
+      wr_pre_week1_context_rank = .data$rank,
+      wr_pre_week1_context_fp = .data$projected_week1_fp,
+      wr_pre_week1_context_depth_team = .data$week1_depth_team
+    ) |>
+    dplyr::left_join(
+      dplyr::select(context, -"prediction_season"),
+      by = "player_key"
+    ) |>
+    dplyr::mutate(
+      week1_depth_team = dplyr::coalesce(
+        as.integer(.data$wr_context_depth_override),
+        as.integer(.data$week1_depth_team)
+      ),
+      wr_week1_context_multiplier = dplyr::coalesce(.data$wr_week1_context_multiplier, 1),
+      wr_week1_context_applied = .data$wr_week1_context_multiplier != 1,
+      wr_context_adjusted_matchup_score_0to100 = dplyr::coalesce(
+        .data$wr_context_adjusted_matchup_score_0to100,
+        .data$matchup_score_0to100
+      )
+    )
+  scalable_stats <- c(
+    "targets", "receptions", "receiving_yards", "receiving_td", "air_yards",
+    "first_read_targets", "end_zone_targets", "receiving_first_downs",
+    "rush_attempts", "rush_yards", "rush_td"
+  )
+  for (stat_name in scalable_stats) {
+    column <- paste0("projected_week1_", stat_name)
+    wr[[column]] <- pmax(
+      wow_prob_num(wr[[column]]) * wr$wr_week1_context_multiplier,
+      0
+    )
+  }
+  wr <- wow_rebuild_week1_derived_stats(wr, "WR")
+  wr$stat_implied_week1_fp_after <- wow_week1_implied_points(wr, "WR")
+  wr$projected_week1_fp <- wr$stat_implied_week1_fp_after
+  wr$stat_projection_delta_vs_model <- wr$projected_week1_fp - wr$model_projected_week1_fp
+  wr$stat_projection_gap_after <- wr$projected_week1_fp - wr$stat_implied_week1_fp_after
+  wr <- wr |>
+    dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+    dplyr::mutate(
+      rank = dplyr::row_number(),
+      tier = wow_week1_tier("WR", .data$rank),
+      final_score = .data$projected_week1_fp
+    )
+  probability_columns <- intersect(
+    paste0("prob_week_", names(wow_prob_targets("WR"))),
+    names(wr)
+  )
+  for (column in probability_columns) {
+    wr[[column]] <- sort(wow_prob_num(wr[[column]]), decreasing = TRUE, na.last = TRUE)
+  }
+  wr <- wow_enforce_wr_context_rank_guardrails(wr, scalable_stats)
+  for (column in probability_columns) {
+    wr[[column]] <- sort(wow_prob_num(wr[[column]]), decreasing = TRUE, na.last = TRUE)
+  }
+  context_audit <- wr |>
+    dplyr::filter(.data$player_key %in% context$player_key) |>
+    dplyr::transmute(
+      player = .data$player,
+      team = .data$team,
+      opponent = .data$opponent,
+      week1_depth_team_before_context = .data$wr_pre_week1_context_depth_team,
+      week1_depth_team_context_override = .data$wr_context_depth_override,
+      week1_depth_team = .data$week1_depth_team,
+      wr_expected_depth_team = .data$wr_expected_depth_team,
+      rank_before = .data$wr_pre_week1_context_rank,
+      rank_after = .data$rank,
+      projected_week1_fp_before = .data$wr_pre_week1_context_fp,
+      projected_week1_fp_after = .data$projected_week1_fp,
+      base_matchup_score_0to100 = .data$matchup_score_0to100,
+      context_adjusted_matchup_score_0to100 = .data$wr_context_adjusted_matchup_score_0to100,
+      wr_week1_context_type = .data$wr_week1_context_type,
+      wr_week1_context_multiplier = .data$wr_week1_context_multiplier,
+      wr_context_rank_guardrail_multiplier = .data$wr_context_rank_guardrail_multiplier,
+      wr_expected_min_rank = .data$wr_expected_min_rank,
+      wr_expected_max_rank = .data$wr_expected_max_rank,
+      wr_week1_context_note = .data$wr_week1_context_note,
+      status = dplyr::if_else(
+        is.finite(.data$wr_week1_context_multiplier) &
+          .data$wr_week1_context_multiplier >= 0.70 &
+          .data$wr_week1_context_multiplier <= 1.15 &
+          .data$week1_depth_team == .data$wr_expected_depth_team &
+          (is.na(.data$wr_expected_min_rank) | .data$rank >= .data$wr_expected_min_rank) &
+          (is.na(.data$wr_expected_max_rank) | .data$rank <= .data$wr_expected_max_rank),
+        "PASS", "FAIL"
+      )
+    ) |>
+    dplyr::arrange(.data$rank_after)
+  missing_context <- setdiff(context$player_key, wr$player_key)
+  if (length(missing_context) > 0L || any(context_audit$status != "PASS")) {
+    failed_context <- context_audit$player[context_audit$status != "PASS"]
+    stop(
+      "WR Week 1 context audit failed for: ",
+      paste(unique(c(missing_context, failed_context)), collapse = ", "),
+      call. = FALSE
+    )
+  }
+  out <- dplyr::bind_rows(
+    dplyr::filter(projections, .data$position != "WR"),
+    wr
+  ) |>
+    dplyr::arrange(.data$position, .data$rank)
+  list(projections = out, audit = context_audit, context = context)
+}
+
+wow_week1_te_rank_bucket <- function(rank) {
+  as.character(cut(
+    suppressWarnings(as.numeric(rank)),
+    breaks = c(0, 6, 12, 18, 24, 36, 48, 72, Inf),
+    labels = c("1-6", "7-12", "13-18", "19-24", "25-36", "37-48", "49-72", "73+"),
+    right = TRUE
+  ))
+}
+
+build_te_wow_week1_usage_audit <- function(
+    projections,
+    prediction_season = 2026L,
+    historical_test_seasons = 2023:2025,
+    write_output = TRUE,
+    output_dir = file.path(
+      model_paths$model_root_dir,
+      "outputs", "editor", "week_over_week",
+      as.character(prediction_season), "week_1"
+    )
+) {
+  load_model_core_packages()
+  te_current <- projections |>
+    dplyr::filter(.data$position == "TE") |>
+    dplyr::mutate(
+      player_key = make_player_key(.data$player),
+      rank_bucket = wow_week1_te_rank_bucket(.data$rank)
+    )
+  frame <- wow_read_historical_sos_week1_board("TE")
+  actual_long <- wow_read_week1_actual_stats("TE", seasons = historical_test_seasons)
+  actual_wide <- reshape(
+    as.data.frame(actual_long),
+    idvar = c("position", "test_season", "player_key"),
+    timevar = "stat",
+    direction = "wide"
+  )
+  names(actual_wide) <- sub("actual_week1\\.", "actual_", names(actual_wide))
+  participation <- wow_read_week1_participation("TE", historical_test_seasons)
+  finish_curve <- build_wow_week1_actual_finish_curve("TE", historical_test_seasons)
+  selected_model <- run_position_wow_week1_backtest("TE")$selected_model
+  historical_rows <- list()
+  row_index <- 1L
+  for (test_season in historical_test_seasons) {
+    train <- frame[!is.na(frame$season) & frame$season < test_season, , drop = FALSE]
+    test <- frame[!is.na(frame$season) & frame$season == test_season, , drop = FALSE]
+    if (nrow(train) < 25L || nrow(test) == 0L) next
+    score <- wow_week1_candidate_scores(train, test)[[selected_model]]
+    test$projected_rank <- rank(-score, ties.method = "first", na.last = "keep")
+    test$rank_bucket <- wow_week1_te_rank_bucket(test$projected_rank)
+    historical_rows[[row_index]] <- test |>
+      dplyr::left_join(
+        actual_wide,
+        by = c("position", "season" = "test_season", "player_key")
+      ) |>
+      dplyr::left_join(participation, by = c("season", "player_key"))
+    row_index <- row_index + 1L
+  }
+  historical_detail <- dplyr::bind_rows(historical_rows) |>
+    dplyr::filter(.data$projected_rank <= 72L) |>
+    dplyr::mutate(
+      actual_targets = dplyr::coalesce(.data$actual_targets, 0),
+      actual_receptions = dplyr::coalesce(.data$actual_receptions, 0),
+      actual_receiving_yards = dplyr::coalesce(.data$actual_receiving_yards, 0),
+      actual_receiving_td = dplyr::coalesce(.data$actual_receiving_td, 0),
+      actual_air_yards = dplyr::coalesce(.data$actual_air_yards, 0),
+      actual_first_read_targets = dplyr::coalesce(.data$actual_first_read_targets, 0),
+      actual_end_zone_targets = dplyr::coalesce(.data$actual_end_zone_targets, 0),
+      actual_receiving_first_downs = dplyr::coalesce(.data$actual_receiving_first_downs, 0),
+      actual_week1_fp = dplyr::coalesce(.data$actual_week1_fp, 0),
+      actual_participated = dplyr::coalesce(.data$actual_participated, FALSE)
+    )
+  historical_activity <- historical_detail |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      historical_forecast_rows = dplyr::n(),
+      historical_active_rows = sum(.data$actual_participated),
+      historical_inactive_rows = sum(!.data$actual_participated),
+      historical_active_rate = mean(.data$actual_participated),
+      historical_all_row_avg_fantasy_points = mean(.data$actual_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    )
+  historical <- historical_detail |>
+    dplyr::filter(.data$actual_participated) |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      historical_seasons = dplyr::n_distinct(.data$season),
+      historical_rows = dplyr::n(),
+      historical_avg_targets = mean(.data$actual_targets, na.rm = TRUE),
+      historical_avg_receptions = mean(.data$actual_receptions, na.rm = TRUE),
+      historical_avg_receiving_yards = mean(.data$actual_receiving_yards, na.rm = TRUE),
+      historical_avg_receiving_td = mean(.data$actual_receiving_td, na.rm = TRUE),
+      historical_avg_air_yards = mean(.data$actual_air_yards, na.rm = TRUE),
+      historical_avg_first_read_targets = mean(.data$actual_first_read_targets, na.rm = TRUE),
+      historical_avg_end_zone_targets = mean(.data$actual_end_zone_targets, na.rm = TRUE),
+      historical_avg_receiving_first_downs = mean(.data$actual_receiving_first_downs, na.rm = TRUE),
+      historical_avg_fantasy_points = mean(.data$actual_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    dplyr::left_join(historical_activity, by = "rank_bucket")
+  current <- te_current |>
+    dplyr::filter(.data$rank <= 72L) |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      current_rows = dplyr::n(),
+      current_avg_targets = mean(.data$projected_week1_targets, na.rm = TRUE),
+      current_avg_receptions = mean(.data$projected_week1_receptions, na.rm = TRUE),
+      current_avg_receiving_yards = mean(.data$projected_week1_receiving_yards, na.rm = TRUE),
+      current_avg_receiving_td = mean(.data$projected_week1_receiving_td, na.rm = TRUE),
+      current_avg_air_yards = mean(.data$projected_week1_air_yards, na.rm = TRUE),
+      current_avg_first_read_targets = mean(.data$projected_week1_first_read_targets, na.rm = TRUE),
+      current_avg_end_zone_targets = mean(.data$projected_week1_end_zone_targets, na.rm = TRUE),
+      current_avg_receiving_first_downs = mean(.data$projected_week1_receiving_first_downs, na.rm = TRUE),
+      current_avg_fantasy_points = mean(.data$projected_week1_fp, na.rm = TRUE),
+      .groups = "drop"
+    )
+  bucket_order <- c("1-6", "7-12", "13-18", "19-24", "25-36", "37-48", "49-72")
+  curve <- dplyr::left_join(historical, current, by = "rank_bucket") |>
+    dplyr::mutate(rank_bucket_order = match(.data$rank_bucket, .env$bucket_order)) |>
+    dplyr::arrange(.data$rank_bucket_order) |>
+    dplyr::mutate(
+      historical_rank_coherent_fantasy_points = -stats::isoreg(
+        seq_along(.data$historical_avg_fantasy_points),
+        -.data$historical_avg_fantasy_points
+      )$yf,
+      historical_fp_rank_order_violation =
+        .data$historical_avg_fantasy_points >
+          dplyr::lag(.data$historical_avg_fantasy_points, default = Inf),
+      target_ratio = .data$current_avg_targets / .data$historical_avg_targets,
+      reception_ratio = .data$current_avg_receptions / .data$historical_avg_receptions,
+      receiving_yard_ratio = .data$current_avg_receiving_yards / .data$historical_avg_receiving_yards,
+      air_yard_ratio = .data$current_avg_air_yards / .data$historical_avg_air_yards,
+      first_read_target_ratio = .data$current_avg_first_read_targets / .data$historical_avg_first_read_targets,
+      end_zone_target_ratio = .data$current_avg_end_zone_targets / .data$historical_avg_end_zone_targets,
+      fantasy_point_ratio = .data$current_avg_fantasy_points / .data$historical_avg_fantasy_points,
+      rank_coherent_fantasy_point_ratio =
+        .data$current_avg_fantasy_points / .data$historical_rank_coherent_fantasy_points,
+      curve_status = dplyr::if_else(
+        .data$target_ratio >= 0.75 & .data$target_ratio <= 1.25 &
+          .data$reception_ratio >= 0.75 & .data$reception_ratio <= 1.25 &
+          .data$receiving_yard_ratio >= 0.70 & .data$receiving_yard_ratio <= 1.30 &
+          .data$fantasy_point_ratio >= 0.70 & .data$fantasy_point_ratio <= 1.30,
+        "PASS", "WATCH"
+      )
+    )
+  weekly <- utils::read.csv(
+    wow_week1_actual_stat_path("TE"),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  recent_profile <- weekly |>
+    dplyr::filter(.data$season %in% 2023:2025, .data$targets > 0) |>
+    dplyr::group_by(.data$player_key) |>
+    dplyr::summarise(
+      profile_games = dplyr::n(),
+      historical_targets_per_game = mean(.data$targets, na.rm = TRUE),
+      historical_receptions_per_game = mean(.data$receptions, na.rm = TRUE),
+      historical_receiving_yards_per_game = mean(.data$receiving_yards, na.rm = TRUE),
+      historical_air_yards_per_game = mean(.data$air_yards, na.rm = TRUE),
+      historical_first_read_targets_per_game = mean(.data$first_read_targets, na.rm = TRUE),
+      historical_end_zone_targets_per_game = mean(.data$end_zone_targets, na.rm = TRUE),
+      .groups = "drop"
+    )
+  individual <- te_current |>
+    dplyr::filter(.data$rank <= 72L) |>
+    dplyr::left_join(recent_profile, by = "player_key") |>
+    dplyr::mutate(
+      target_profile_ratio = .data$projected_week1_targets / .data$historical_targets_per_game,
+      reception_profile_ratio = .data$projected_week1_receptions / .data$historical_receptions_per_game,
+      receiving_yard_profile_ratio = .data$projected_week1_receiving_yards / .data$historical_receiving_yards_per_game,
+      air_yard_profile_ratio = .data$projected_week1_air_yards / .data$historical_air_yards_per_game,
+      profile_status = dplyr::case_when(
+        is.na(.data$profile_games) | .data$profile_games < 4L ~ "limited_or_new_profile",
+        .data$target_profile_ratio < 0.60 | .data$target_profile_ratio > 1.40 |
+          .data$reception_profile_ratio < 0.60 | .data$reception_profile_ratio > 1.40 |
+          .data$receiving_yard_profile_ratio < 0.60 | .data$receiving_yard_profile_ratio > 1.40 |
+          .data$air_yard_profile_ratio < 0.50 | .data$air_yard_profile_ratio > 1.50 ~ "WATCH",
+        TRUE ~ "PASS"
+      )
+    ) |>
+    dplyr::select(
+      "rank", "player", "team", "opponent", "week1_depth_team",
+      "projected_week1_fp", "projected_week1_targets", "projected_week1_receptions",
+      "projected_week1_receiving_yards", "projected_week1_receiving_td",
+      "projected_week1_air_yards", "projected_week1_first_read_targets",
+      "projected_week1_end_zone_targets", "projected_week1_receiving_first_downs",
+      "profile_games", "historical_targets_per_game", "historical_receptions_per_game",
+      "historical_receiving_yards_per_game", "historical_air_yards_per_game",
+      "historical_first_read_targets_per_game", "historical_end_zone_targets_per_game",
+      "target_profile_ratio", "reception_profile_ratio",
+      "receiving_yard_profile_ratio", "air_yard_profile_ratio", "profile_status"
+    ) |>
+    dplyr::arrange(.data$rank)
+  summary <- data.frame(
+    position = "TE",
+    prediction_season = as.integer(prediction_season),
+    curve_buckets = nrow(curve),
+    curve_buckets_passed = sum(curve$curve_status == "PASS", na.rm = TRUE),
+    individual_profiles_checked = sum(individual$profile_status != "limited_or_new_profile", na.rm = TRUE),
+    individual_profile_watch_rows = sum(individual$profile_status == "WATCH", na.rm = TRUE),
+    status = if (all(curve$curve_status == "PASS")) "PASS" else "WATCH",
+    stringsAsFactors = FALSE
+  )
+  manifest <- data.frame()
+  if (isTRUE(write_output)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    curve_path <- file.path(output_dir, paste0("te_wow_week1_usage_curve_audit_", prediction_season, ".csv"))
+    finish_curve_path <- file.path(output_dir, "te_wow_week1_actual_finish_curve_2023_2025.csv")
+    individual_path <- file.path(output_dir, paste0("te_wow_week1_individual_usage_audit_", prediction_season, ".csv"))
+    summary_path <- file.path(output_dir, paste0("te_wow_week1_usage_audit_summary_", prediction_season, ".csv"))
+    utils::write.csv(curve, curve_path, row.names = FALSE, na = "")
+    utils::write.csv(finish_curve, finish_curve_path, row.names = FALSE, na = "")
+    utils::write.csv(individual, individual_path, row.names = FALSE, na = "")
+    utils::write.csv(summary, summary_path, row.names = FALSE, na = "")
+    manifest <- data.frame(
+      artifact = c(
+        "te_usage_curve_audit", "te_actual_finish_curve",
+        "te_individual_usage_audit", "te_usage_audit_summary"
+      ),
+      output_path = c(curve_path, finish_curve_path, individual_path, summary_path),
+      exists = file.exists(c(curve_path, finish_curve_path, individual_path, summary_path)),
+      stringsAsFactors = FALSE
+    )
+  }
+  result <- list(
+    summary = summary,
+    curve = curve,
+    finish_curve = finish_curve,
+    individual = individual,
+    manifest = manifest
+  )
+  assign("te_wow_week1_usage_audit", result, envir = .GlobalEnv)
+  result
+}
+
+wow_week1_k_rank_bucket <- function(rank) {
+  wow_week1_finish_bucket("K", rank)
+}
+
+build_k_wow_week1_usage_audit <- function(
+    projections,
+    prediction_season = 2026L,
+    historical_test_seasons = 2023:2025,
+    write_output = TRUE,
+    output_dir = file.path(
+      model_paths$model_root_dir,
+      "outputs", "editor", "week_over_week",
+      as.character(prediction_season), "week_1"
+    )
+) {
+  load_model_core_packages()
+  k_current <- projections |>
+    dplyr::filter(.data$position == "K") |>
+    dplyr::mutate(
+      player_key = make_player_key(.data$player),
+      rank_bucket = wow_week1_k_rank_bucket(.data$rank)
+    )
+  frame <- wow_read_historical_sos_week1_board("K")
+  actual_long <- wow_read_week1_actual_stats("K", seasons = historical_test_seasons)
+  actual_wide <- reshape(
+    as.data.frame(actual_long),
+    idvar = c("position", "test_season", "player_key"),
+    timevar = "stat",
+    direction = "wide"
+  )
+  names(actual_wide) <- sub("actual_week1\\.", "actual_", names(actual_wide))
+  participation <- wow_read_week1_participation("K", historical_test_seasons)
+  finish_curve <- build_wow_week1_actual_finish_curve("K", historical_test_seasons)
+  selected_model <- run_position_wow_week1_backtest("K")$selected_model
+  historical_rows <- list()
+  row_index <- 1L
+  for (test_season in historical_test_seasons) {
+    train <- frame[!is.na(frame$season) & frame$season < test_season, , drop = FALSE]
+    test <- frame[!is.na(frame$season) & frame$season == test_season, , drop = FALSE]
+    if (nrow(train) < 25L || nrow(test) == 0L) next
+    score <- wow_week1_candidate_scores(train, test)[[selected_model]]
+    test$projected_rank <- rank(-score, ties.method = "first", na.last = "keep")
+    test$rank_bucket <- wow_week1_k_rank_bucket(test$projected_rank)
+    historical_rows[[row_index]] <- test |>
+      dplyr::left_join(
+        actual_wide,
+        by = c("position", "season" = "test_season", "player_key")
+      ) |>
+      dplyr::left_join(participation, by = c("season", "player_key"))
+    row_index <- row_index + 1L
+  }
+  stat_names <- wow_week1_stat_columns("K")
+  historical_detail <- dplyr::bind_rows(historical_rows) |>
+    dplyr::filter(.data$projected_rank <= 32L) |>
+    dplyr::mutate(
+      actual_participated = dplyr::coalesce(.data$actual_participated, FALSE),
+      actual_week1_fp = dplyr::coalesce(.data$actual_week1_fp, 0)
+    )
+  for (stat_name in stat_names) {
+    column <- paste0("actual_", stat_name)
+    historical_detail[[column]] <- dplyr::coalesce(
+      wow_prob_num(historical_detail[[column]]),
+      0
+    )
+  }
+  historical_activity <- historical_detail |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      historical_forecast_rows = dplyr::n(),
+      historical_active_rows = sum(.data$actual_participated),
+      historical_inactive_rows = sum(!.data$actual_participated),
+      historical_active_rate = mean(.data$actual_participated),
+      historical_all_row_avg_fantasy_points = mean(.data$actual_week1_fp),
+      .groups = "drop"
+    )
+  historical <- historical_detail |>
+    dplyr::filter(.data$actual_participated) |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      historical_seasons = dplyr::n_distinct(.data$season),
+      historical_rows = dplyr::n(),
+      historical_avg_fga = mean(.data$actual_fga),
+      historical_avg_fgm = mean(.data$actual_fgm),
+      historical_avg_fga_40_49 = mean(.data$actual_fga_40_49),
+      historical_avg_fgm_40_49 = mean(.data$actual_fgm_40_49),
+      historical_avg_fga_50_plus = mean(.data$actual_fga_50_plus),
+      historical_avg_fgm_50_plus = mean(.data$actual_fgm_50_plus),
+      historical_avg_xpa = mean(.data$actual_xpa),
+      historical_avg_xpm = mean(.data$actual_xpm),
+      historical_avg_fantasy_points = mean(.data$actual_week1_fp),
+      .groups = "drop"
+    ) |>
+    dplyr::left_join(historical_activity, by = "rank_bucket")
+  current <- k_current |>
+    dplyr::filter(.data$rank <= 32L, .data$week1_k_starter) |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      current_rows = dplyr::n(),
+      current_avg_fga = mean(.data$projected_week1_fga),
+      current_avg_fgm = mean(.data$projected_week1_fgm),
+      current_avg_fga_40_49 = mean(.data$projected_week1_fga_40_49),
+      current_avg_fgm_40_49 = mean(.data$projected_week1_fgm_40_49),
+      current_avg_fga_50_plus = mean(.data$projected_week1_fga_50_plus),
+      current_avg_fgm_50_plus = mean(.data$projected_week1_fgm_50_plus),
+      current_avg_xpa = mean(.data$projected_week1_xpa),
+      current_avg_xpm = mean(.data$projected_week1_xpm),
+      current_avg_fantasy_points = mean(.data$projected_week1_fp),
+      .groups = "drop"
+    )
+  bucket_order <- c("1-6", "7-12", "13-18", "19-24", "25-32")
+  curve <- dplyr::left_join(historical, current, by = "rank_bucket") |>
+    dplyr::mutate(rank_bucket_order = match(.data$rank_bucket, .env$bucket_order)) |>
+    dplyr::arrange(.data$rank_bucket_order) |>
+    dplyr::mutate(
+      historical_expected_rank_coherent_fantasy_points = -stats::isoreg(
+        seq_along(.data$historical_all_row_avg_fantasy_points),
+        -.data$historical_all_row_avg_fantasy_points
+      )$yf,
+      historical_active_fp_rank_order_violation =
+        .data$historical_avg_fantasy_points >
+          dplyr::lag(.data$historical_avg_fantasy_points, default = Inf),
+      expected_fantasy_point_ratio =
+        .data$current_avg_fantasy_points /
+          .data$historical_expected_rank_coherent_fantasy_points,
+      active_fantasy_point_ratio =
+        .data$current_avg_fantasy_points / .data$historical_avg_fantasy_points,
+      fga_ratio = .data$current_avg_fga / .data$historical_avg_fga,
+      fgm_ratio = .data$current_avg_fgm / .data$historical_avg_fgm,
+      xpa_ratio = .data$current_avg_xpa / .data$historical_avg_xpa,
+      xpm_ratio = .data$current_avg_xpm / .data$historical_avg_xpm,
+      curve_status = dplyr::if_else(
+        .data$expected_fantasy_point_ratio >= 0.75 &
+          .data$expected_fantasy_point_ratio <= 1.25,
+        "PASS", "WATCH"
+      )
+    )
+  starter_audit <- k_current |>
+    dplyr::summarise(
+      position = "K",
+      prediction_season = as.integer(.env$prediction_season),
+      board_rows = dplyr::n(),
+      starter_rows = sum(.data$week1_k_starter, na.rm = TRUE),
+      starter_teams = dplyr::n_distinct(.data$team[.data$week1_k_starter %in% TRUE]),
+      backup_rows = sum(!.data$week1_k_starter, na.rm = TRUE),
+      nonzero_backup_projections = sum(
+        !.data$week1_k_starter & .data$projected_week1_fp > 1e-9,
+        na.rm = TRUE
+      ),
+      status = dplyr::if_else(
+        .data$starter_rows == 32L & .data$starter_teams == 32L &
+          .data$nonzero_backup_projections == 0L,
+        "PASS", "FAIL"
+      )
+    )
+  if (any(starter_audit$status != "PASS")) {
+    stop("K Week 1 starter gate audit failed.", call. = FALSE)
+  }
+  manifest <- data.frame()
+  if (isTRUE(write_output)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    curve_path <- file.path(output_dir, paste0("k_wow_week1_usage_curve_audit_", prediction_season, ".csv"))
+    finish_curve_path <- file.path(output_dir, "k_wow_week1_actual_finish_curve_2023_2025.csv")
+    starter_path <- file.path(output_dir, paste0("k_wow_week1_starter_gate_audit_", prediction_season, ".csv"))
+    utils::write.csv(curve, curve_path, row.names = FALSE, na = "")
+    utils::write.csv(finish_curve, finish_curve_path, row.names = FALSE, na = "")
+    utils::write.csv(starter_audit, starter_path, row.names = FALSE, na = "")
+    manifest <- data.frame(
+      artifact = c("k_usage_curve_audit", "k_actual_finish_curve", "k_starter_gate_audit"),
+      output_path = c(curve_path, finish_curve_path, starter_path),
+      exists = file.exists(c(curve_path, finish_curve_path, starter_path)),
+      stringsAsFactors = FALSE
+    )
+  }
+  result <- list(
+    curve = curve,
+    finish_curve = finish_curve,
+    starter_audit = starter_audit,
+    manifest = manifest
+  )
+  assign("k_wow_week1_usage_audit", result, envir = .GlobalEnv)
+  result
+}
+
+wow_week1_dst_rank_bucket <- function(rank) {
+  wow_week1_finish_bucket("DST", rank)
+}
+
+build_dst_wow_week1_usage_audit <- function(
+    projections,
+    prediction_season = 2026L,
+    historical_test_seasons = 2023:2025,
+    write_output = TRUE,
+    output_dir = file.path(
+      model_paths$model_root_dir,
+      "outputs", "editor", "week_over_week",
+      as.character(prediction_season), "week_1"
+    )
+) {
+  load_model_core_packages()
+  dst_current <- projections |>
+    dplyr::filter(.data$position == "DST") |>
+    dplyr::mutate(
+      player_key = make_player_key(.data$player),
+      rank_bucket = wow_week1_dst_rank_bucket(.data$rank)
+    )
+  frame <- wow_read_historical_sos_week1_board("DST")
+  actual_long <- wow_read_week1_actual_stats("DST", seasons = historical_test_seasons)
+  actual_wide <- reshape(
+    as.data.frame(actual_long),
+    idvar = c("position", "test_season", "player_key"),
+    timevar = "stat",
+    direction = "wide"
+  )
+  names(actual_wide) <- sub("actual_week1\\.", "actual_", names(actual_wide))
+  finish_curve <- build_wow_week1_actual_finish_curve("DST", historical_test_seasons)
+  selected_model <- run_position_wow_week1_backtest("DST")$selected_model
+  historical_rows <- list()
+  row_index <- 1L
+  for (test_season in historical_test_seasons) {
+    train <- frame[!is.na(frame$season) & frame$season < test_season, , drop = FALSE]
+    test <- frame[!is.na(frame$season) & frame$season == test_season, , drop = FALSE]
+    if (nrow(train) < 25L || nrow(test) == 0L) next
+    score <- wow_week1_candidate_scores(train, test)[[selected_model]]
+    test$projected_rank <- rank(-score, ties.method = "first", na.last = "keep")
+    test$rank_bucket <- wow_week1_dst_rank_bucket(test$projected_rank)
+    historical_rows[[row_index]] <- test |>
+      dplyr::left_join(
+        actual_wide,
+        by = c("position", "season" = "test_season", "player_key")
+      )
+    row_index <- row_index + 1L
+  }
+  stat_names <- wow_week1_stat_columns("DST")
+  historical_detail <- dplyr::bind_rows(historical_rows) |>
+    dplyr::filter(.data$projected_rank <= 32L) |>
+    dplyr::mutate(actual_week1_fp = dplyr::coalesce(.data$actual_week1_fp, 0))
+  for (stat_name in stat_names) {
+    column <- paste0("actual_", stat_name)
+    historical_detail[[column]] <- dplyr::coalesce(
+      wow_prob_num(historical_detail[[column]]),
+      0
+    )
+  }
+  historical <- historical_detail |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      historical_seasons = dplyr::n_distinct(.data$season, na.rm = TRUE),
+      historical_rows = dplyr::n(),
+      historical_forecast_rows = dplyr::n(),
+      historical_active_rows = dplyr::n(),
+      historical_inactive_rows = 0L,
+      historical_active_rate = 1,
+      historical_avg_sacks = mean(.data$actual_sacks),
+      historical_avg_interceptions = mean(.data$actual_interceptions),
+      historical_avg_fumbles = mean(.data$actual_fumbles),
+      historical_avg_defensive_tds = mean(.data$actual_defensive_tds),
+      historical_avg_dst_fantasy_points = mean(.data$actual_dst_fantasy_points),
+      historical_avg_fantasy_points = mean(.data$actual_week1_fp),
+      historical_all_row_avg_fantasy_points = mean(.data$actual_week1_fp),
+      .groups = "drop"
+    )
+  current <- dst_current |>
+    dplyr::filter(.data$rank <= 32L) |>
+    dplyr::group_by(.data$rank_bucket) |>
+    dplyr::summarise(
+      current_rows = dplyr::n(),
+      current_avg_sacks = mean(.data$projected_week1_sacks),
+      current_avg_interceptions = mean(.data$projected_week1_interceptions),
+      current_avg_fumbles = mean(.data$projected_week1_fumbles),
+      current_avg_defensive_tds = mean(.data$projected_week1_defensive_tds),
+      current_avg_dst_fantasy_points = mean(.data$projected_week1_dst_fantasy_points),
+      current_avg_fantasy_points = mean(.data$projected_week1_fp),
+      .groups = "drop"
+    )
+  bucket_order <- c("1-6", "7-12", "13-18", "19-24", "25-32")
+  curve <- dplyr::left_join(historical, current, by = "rank_bucket") |>
+    dplyr::mutate(rank_bucket_order = match(.data$rank_bucket, .env$bucket_order)) |>
+    dplyr::arrange(.data$rank_bucket_order) |>
+    dplyr::mutate(
+      historical_expected_rank_coherent_fantasy_points = -stats::isoreg(
+        seq_along(.data$historical_all_row_avg_fantasy_points),
+        -.data$historical_all_row_avg_fantasy_points
+      )$yf,
+      historical_fp_rank_order_violation =
+        .data$historical_avg_fantasy_points >
+          dplyr::lag(.data$historical_avg_fantasy_points, default = Inf),
+      expected_fantasy_point_ratio =
+        .data$current_avg_fantasy_points /
+          .data$historical_expected_rank_coherent_fantasy_points,
+      active_fantasy_point_ratio =
+        .data$current_avg_fantasy_points / .data$historical_avg_fantasy_points,
+      sacks_ratio = .data$current_avg_sacks / .data$historical_avg_sacks,
+      interception_ratio =
+        .data$current_avg_interceptions / .data$historical_avg_interceptions,
+      fumble_ratio = .data$current_avg_fumbles / .data$historical_avg_fumbles,
+      defensive_td_ratio =
+        .data$current_avg_defensive_tds / .data$historical_avg_defensive_tds,
+      curve_status = dplyr::if_else(
+        .data$expected_fantasy_point_ratio >= 0.75 &
+          .data$expected_fantasy_point_ratio <= 1.25,
+        "PASS", "WATCH"
+      )
+    )
+  projection_audit <- dst_current |>
+    dplyr::arrange(.data$rank) |>
+    dplyr::summarise(
+      position = "DST",
+      prediction_season = as.integer(.env$prediction_season),
+      board_rows = dplyr::n(),
+      team_rows = dplyr::n_distinct(.data$team),
+      duplicate_team_rows = dplyr::n() - dplyr::n_distinct(.data$team),
+      missing_stat_rows = sum(
+        !is.finite(.data$projected_week1_sacks) |
+          !is.finite(.data$projected_week1_interceptions) |
+          !is.finite(.data$projected_week1_fumbles) |
+          !is.finite(.data$projected_week1_defensive_tds) |
+          !is.finite(.data$projected_week1_fp)
+      ),
+      projected_points_rank_violations = sum(
+        diff(.data$projected_week1_fp) > 1e-9,
+        na.rm = TRUE
+      ),
+      status = dplyr::if_else(
+        .data$board_rows == 32L & .data$team_rows == 32L &
+          .data$duplicate_team_rows == 0L & .data$missing_stat_rows == 0L &
+          .data$projected_points_rank_violations == 0L,
+        "PASS", "FAIL"
+      )
+    )
+  if (any(projection_audit$status != "PASS")) {
+    stop("DST Week 1 projection audit failed.", call. = FALSE)
+  }
+  manifest <- data.frame()
+  if (isTRUE(write_output)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    curve_path <- file.path(
+      output_dir,
+      paste0("dst_wow_week1_usage_curve_audit_", prediction_season, ".csv")
+    )
+    finish_curve_path <- file.path(
+      output_dir,
+      "dst_wow_week1_actual_finish_curve_2023_2025.csv"
+    )
+    projection_audit_path <- file.path(
+      output_dir,
+      paste0("dst_wow_week1_projection_audit_", prediction_season, ".csv")
+    )
+    utils::write.csv(curve, curve_path, row.names = FALSE, na = "")
+    utils::write.csv(finish_curve, finish_curve_path, row.names = FALSE, na = "")
+    utils::write.csv(projection_audit, projection_audit_path, row.names = FALSE, na = "")
+    manifest <- data.frame(
+      artifact = c(
+        "dst_usage_curve_audit", "dst_actual_finish_curve", "dst_projection_audit"
+      ),
+      output_path = c(curve_path, finish_curve_path, projection_audit_path),
+      exists = file.exists(c(curve_path, finish_curve_path, projection_audit_path)),
+      stringsAsFactors = FALSE
+    )
+  }
+  result <- list(
+    curve = curve,
+    finish_curve = finish_curve,
+    projection_audit = projection_audit,
+    manifest = manifest
+  )
+  assign("dst_wow_week1_usage_audit", result, envir = .GlobalEnv)
+  result
+}
+
+wow_dst_week1_context_overrides <- function(prediction_season = 2026L) {
+  data.frame(
+    prediction_season = as.integer(prediction_season),
+    player_key = make_player_key("Miami Dolphins"),
+    dst_week1_context_type = "opponent_offense_upgrade_and_defense_risk",
+    dst_week1_context_multiplier = 0.90,
+    dst_week1_context_note = paste(
+      "Apply a modest Week 1 downgrade because the improved Raiders offense makes",
+      "the matchup less favorable than the base score indicates, while Miami carries",
+      "meaningful defensive quality risk."
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+wow_apply_dst_week1_context <- function(
+    projections,
+    prediction_season = 2026L,
+    context = wow_dst_week1_context_overrides(prediction_season)
+) {
+  load_model_core_packages()
+  if (!is.data.frame(projections) || nrow(projections) == 0L) {
+    stop("DST Week 1 context requires non-empty projections.", call. = FALSE)
+  }
+  context <- context |>
+    dplyr::filter(.data$prediction_season == as.integer(prediction_season)) |>
+    dplyr::distinct(.data$player_key, .keep_all = TRUE)
+  dst <- projections |>
+    dplyr::filter(.data$position == "DST") |>
+    dplyr::mutate(
+      player_key = dplyr::coalesce(as.character(.data$player_key), make_player_key(.data$player)),
+      dst_pre_week1_context_rank = .data$rank,
+      dst_pre_week1_context_fp = .data$projected_week1_fp
+    ) |>
+    dplyr::left_join(
+      dplyr::select(context, -dplyr::all_of("prediction_season")),
+      by = "player_key"
+    ) |>
+    dplyr::mutate(
+      dst_week1_context_multiplier = dplyr::coalesce(.data$dst_week1_context_multiplier, 1),
+      dst_week1_context_applied = .data$dst_week1_context_multiplier != 1
+    )
+  for (stat_name in wow_week1_stat_columns("DST")) {
+    column <- paste0("projected_week1_", stat_name)
+    dst[[column]] <- pmax(
+      wow_prob_num(dst[[column]]) * dst$dst_week1_context_multiplier,
+      0
+    )
+  }
+  dst$stat_implied_week1_fp_after <- wow_week1_implied_points(dst, "DST")
+  dst$projected_week1_fp <- dst$stat_implied_week1_fp_after
+  dst$stat_projection_delta_vs_model <- dst$projected_week1_fp - dst$model_projected_week1_fp
+  dst$stat_projection_gap_after <- dst$projected_week1_fp - dst$stat_implied_week1_fp_after
+  dst$dst_week1_context_stat_identity_gap <- abs(
+    dst$projected_week1_fp - wow_week1_implied_points(dst, "DST")
+  )
+  dst <- dst |>
+    dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+    dplyr::mutate(
+      rank = dplyr::row_number(),
+      tier = wow_week1_tier("DST", .data$rank),
+      final_score = .data$projected_week1_fp
+    )
+  probability_columns <- intersect(
+    paste0("prob_week_", names(wow_prob_targets("DST"))),
+    names(dst)
+  )
+  for (column in probability_columns) {
+    dst[[column]] <- sort(wow_prob_num(dst[[column]]), decreasing = TRUE, na.last = TRUE)
+  }
+  out <- dplyr::bind_rows(
+    dplyr::filter(projections, .data$position != "DST"),
+    dst
+  ) |>
+    dplyr::arrange(.data$position, .data$rank)
+  audit <- dst |>
+    dplyr::filter(.data$dst_week1_context_applied) |>
+    dplyr::transmute(
+      player = .data$player,
+      team = .data$team,
+      opponent = .data$opponent,
+      rank_before = .data$dst_pre_week1_context_rank,
+      rank_after = .data$rank,
+      projected_week1_fp_before = .data$dst_pre_week1_context_fp,
+      projected_week1_fp_after = .data$projected_week1_fp,
+      dst_week1_context_type = .data$dst_week1_context_type,
+      dst_week1_context_multiplier = .data$dst_week1_context_multiplier,
+      dst_week1_context_note = .data$dst_week1_context_note,
+      stat_identity_gap = .data$dst_week1_context_stat_identity_gap,
+      status = dplyr::if_else(.data$stat_identity_gap <= 1e-8, "PASS", "FAIL")
+    )
+  if (nrow(audit) != nrow(context) || any(audit$status != "PASS")) {
+    stop("DST Week 1 context audit failed.", call. = FALSE)
+  }
+  list(projections = out, audit = audit, context = context)
+}
+
+wow_week1_consensus_data_dir <- function() {
+  file.path(dirname(dirname(model_paths$model_root_dir)), "extra model data")
+}
+
+wow_week1_consensus_alias_key <- function(position, player_key) {
+  position <- toupper(as.character(position))
+  player_key <- as.character(player_key)
+  dplyr::case_when(
+    position == "RB" & player_key == "kenny gainwell" ~ "kenneth gainwell",
+    position == "WR" & player_key == "joshua palmer" ~ "josh palmer",
+    position == "K" & player_key == "andy borregales" ~ "andres borregales",
+    TRUE ~ player_key
+  )
+}
+
+wow_read_week1_consensus_rankings <- function(
+    prediction_season = 2026L,
+    positions = c("QB", "RB", "WR", "TE", "K", "DST"),
+    data_dir = wow_week1_consensus_data_dir()
+) {
+  load_model_core_packages()
+  rows <- lapply(toupper(positions), function(position) {
+    path <- file.path(
+      data_dir,
+      paste0(
+        "FantasyPros_", as.integer(prediction_season), "_Week_1_",
+        position, "_Rankings.csv"
+      )
+    )
+    if (!file.exists(path)) stop("Missing Week 1 consensus file: ", path, call. = FALSE)
+    raw <- utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+    names(raw) <- trimws(names(raw))
+    required <- c("RK", "PLAYER NAME", "TEAM", "OPP", "MATCHUP", "START/SIT", "PROJ. FPTS")
+    missing <- setdiff(required, names(raw))
+    if (length(missing) > 0L) {
+      stop(
+        "Week 1 consensus file has an unexpected schema for ", position,
+        ": ", paste(missing, collapse = ", "),
+        call. = FALSE
+      )
+    }
+    player <- as.character(raw[["PLAYER NAME"]])
+    opponent_raw <- trimws(as.character(raw[["OPP"]]))
+    matchup_raw <- trimws(as.character(raw[["MATCHUP"]]))
+    opportunity <- if ("OPPORTUNITY" %in% names(raw)) {
+      as.character(raw[["OPPORTUNITY"]])
+    } else {
+      rep(NA_character_, nrow(raw))
+    }
+    efficiency <- if ("EFFICIENCY" %in% names(raw)) {
+      as.character(raw[["EFFICIENCY"]])
+    } else {
+      rep(NA_character_, nrow(raw))
+    }
+    key <- wow_week1_consensus_alias_key(position, make_player_key(player))
+    data.frame(
+      position = position,
+      consensus_rank = suppressWarnings(as.integer(raw[["RK"]])),
+      consensus_player = player,
+      player_key = key,
+      consensus_team = normalize_team_abbr(trimws(as.character(raw[["TEAM"]]))),
+      consensus_opponent = normalize_team_abbr(trimws(gsub(
+        "^(vs\\.?|at)\\s+", "", opponent_raw, ignore.case = TRUE
+      ))),
+      consensus_matchup = matchup_raw,
+      consensus_matchup_stars = suppressWarnings(as.numeric(sub(" .*", "", matchup_raw))),
+      consensus_start_sit = as.character(raw[["START/SIT"]]),
+      consensus_projected_fp = wow_prob_num(raw[["PROJ. FPTS"]]),
+      consensus_opportunity = opportunity,
+      consensus_efficiency = efficiency,
+      consensus_source = "FantasyPros",
+      consensus_source_file = basename(path),
+      consensus_source_modified = format(
+        file.info(path)$mtime,
+        "%Y-%m-%d %H:%M:%S"
+      ),
+      stringsAsFactors = FALSE
+    )
+  })
+  consensus <- dplyr::bind_rows(rows) |>
+    dplyr::filter(
+      is.finite(.data$consensus_rank),
+      nzchar(.data$player_key)
+    )
+  duplicates <- consensus |>
+    dplyr::count(.data$position, .data$player_key) |>
+    dplyr::filter(.data$n > 1L)
+  if (nrow(duplicates) > 0L) {
+    stop("Week 1 consensus contains duplicate position-player keys.", call. = FALSE)
+  }
+  consensus
+}
+
+build_core_wow_week1_consensus_comparison <- function(
+    projections,
+    prediction_season = 2026L,
+    data_dir = wow_week1_consensus_data_dir(),
+    write_output = TRUE,
+    output_dir = wow_production_output_dir()
+) {
+  load_model_core_packages()
+  if (!is.data.frame(projections) || nrow(projections) == 0L) {
+    stop("Week 1 consensus comparison requires non-empty projections.", call. = FALSE)
+  }
+  matched_z_score <- function(values, coverage) {
+    eligible <- coverage == "matched" & is.finite(values)
+    if (sum(eligible) < 2L) return(rep(NA_real_, length(values)))
+    spread <- stats::sd(values[eligible])
+    if (!is.finite(spread) || spread <= 0) return(rep(NA_real_, length(values)))
+    (values - mean(values[eligible])) / spread
+  }
+  safe_mean <- function(values) {
+    values <- values[is.finite(values)]
+    if (length(values) == 0L) return(NA_real_)
+    mean(values)
+  }
+  safe_spearman <- function(left, right) {
+    eligible <- is.finite(left) & is.finite(right)
+    if (sum(eligible) < 2L) return(NA_real_)
+    suppressWarnings(stats::cor(left[eligible], right[eligible], method = "spearman"))
+  }
+  consensus <- wow_read_week1_consensus_rankings(
+    prediction_season = prediction_season,
+    data_dir = data_dir
+  )
+  board <- projections |>
+    dplyr::transmute(
+      position = toupper(as.character(.data$position)),
+      player_key = make_player_key(.data$player),
+      model_rank = suppressWarnings(as.integer(.data$rank)),
+      model_player = as.character(.data$player),
+      model_team = normalize_team_abbr(.data$team),
+      model_opponent = normalize_team_abbr(.data$opponent),
+      model_projected_fp = wow_prob_num(.data$projected_week1_fp),
+      model_week1_k_starter = dplyr::if_else(
+        .data$position == "K",
+        dplyr::coalesce(as.logical(.data$week1_k_starter), FALSE),
+        NA
+      )
+    )
+  comparison <- dplyr::full_join(
+    board,
+    consensus,
+    by = c("position", "player_key")
+  ) |>
+    dplyr::group_by(.data$position) |>
+    dplyr::mutate(
+      consensus_max_rank = max(.data$consensus_rank, na.rm = TRUE),
+      consensus_team_has_matched_player =
+        !is.na(.data$consensus_rank) & is.na(.data$model_rank) &
+          .data$consensus_team %in%
+            .data$consensus_team[!is.na(.data$model_rank) & !is.na(.data$consensus_rank)],
+      consensus_team_has_different_model_player =
+        .data$position == "K" &
+          !is.na(.data$consensus_rank) & is.na(.data$model_rank) &
+          !.data$consensus_team_has_matched_player &
+          .data$consensus_team %in% .data$model_team[!is.na(.data$model_rank)],
+      model_team_has_different_consensus_player =
+        .data$position == "K" &
+          !is.na(.data$model_rank) & is.na(.data$consensus_rank) &
+          dplyr::coalesce(.data$model_week1_k_starter, FALSE) &
+          .data$model_team %in% .data$consensus_team[!is.na(.data$consensus_rank)]
+    ) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(
+      consensus_coverage = dplyr::case_when(
+        !is.na(.data$model_rank) & !is.na(.data$consensus_rank) ~ "matched",
+        is.na(.data$model_rank) ~ "consensus_only",
+        TRUE ~ "model_only"
+      ),
+      consensus_rank_gap = .data$model_rank - .data$consensus_rank,
+      consensus_abs_rank_gap = abs(.data$consensus_rank_gap),
+      consensus_fp_gap = .data$model_projected_fp - .data$consensus_projected_fp,
+      consensus_team_match = dplyr::if_else(
+        .data$consensus_coverage == "matched",
+        .data$model_team == .data$consensus_team,
+        NA
+      ),
+      consensus_opponent_match = dplyr::if_else(
+        .data$consensus_coverage == "matched",
+        .data$model_opponent == .data$consensus_opponent,
+        NA
+      ),
+      consensus_major_gap_threshold = dplyr::case_when(
+        .data$position %in% c("K", "DST") ~ 6,
+        pmin(.data$model_rank, .data$consensus_rank, na.rm = TRUE) <= 12 ~ 6,
+        pmin(.data$model_rank, .data$consensus_rank, na.rm = TRUE) <= 36 ~ 10,
+        TRUE ~ 15
+      ),
+      consensus_review_status = dplyr::case_when(
+        .data$position == "K" & .data$consensus_team_has_matched_player ~
+          "CONSENSUS_TEAM_COMPETITION",
+        .data$consensus_team_has_different_model_player ~ "CONSENSUS_TEAM_STARTER_CONFLICT",
+        .data$model_team_has_different_consensus_player ~ "MODEL_TEAM_STARTER_CONFLICT",
+        .data$consensus_coverage == "consensus_only" ~ "CONSENSUS_ONLY",
+        .data$consensus_coverage == "model_only" &
+          .data$model_rank <= .data$consensus_max_rank ~ "MODEL_ONLY_IN_CONSENSUS_WINDOW",
+        .data$consensus_coverage == "model_only" ~ "MODEL_ONLY_BEYOND_CONSENSUS_WINDOW",
+        !.data$consensus_team_match ~ "TEAM_MISMATCH",
+        !.data$consensus_opponent_match ~ "OPPONENT_MISMATCH",
+        .data$consensus_abs_rank_gap >= .data$consensus_major_gap_threshold ~ "MAJOR_RANK_GAP",
+        .data$consensus_abs_rank_gap >= 3 ~ "WATCH_RANK_GAP",
+        TRUE ~ "ALIGNED"
+      )
+    ) |>
+    dplyr::group_by(.data$position) |>
+    dplyr::mutate(
+      consensus_model_projection_z = matched_z_score(
+        .data$model_projected_fp, .data$consensus_coverage
+      ),
+      consensus_projection_z = matched_z_score(
+        .data$consensus_projected_fp, .data$consensus_coverage
+      ),
+      consensus_projection_z_gap =
+        .data$consensus_model_projection_z - .data$consensus_projection_z,
+      consensus_abs_projection_z_gap = abs(.data$consensus_projection_z_gap)
+    ) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(
+      consensus_action_rank_window = dplyr::case_when(
+        .data$position == "QB" ~ 32L,
+        .data$position == "RB" ~ 72L,
+        .data$position == "WR" ~ 96L,
+        .data$position == "TE" ~ 36L,
+        .data$position %in% c("K", "DST") ~ 32L,
+        TRUE ~ 36L
+      ),
+      consensus_in_action_window =
+        .data$consensus_coverage == "matched" &
+        (.data$model_rank <= .data$consensus_action_rank_window |
+          .data$consensus_rank <= .data$consensus_action_rank_window),
+      consensus_signal_priority = dplyr::case_when(
+        .data$consensus_review_status %in% c(
+          "CONSENSUS_TEAM_COMPETITION", "CONSENSUS_TEAM_STARTER_CONFLICT",
+          "MODEL_TEAM_STARTER_CONFLICT"
+        ) ~ "HIGH_ROLE_OR_SOURCE_CONFLICT",
+        .data$consensus_review_status %in% c("TEAM_MISMATCH", "OPPONENT_MISMATCH") ~
+          "HIGH_DATA_CONFLICT",
+        .data$consensus_review_status == "CONSENSUS_ONLY" ~ "CONSENSUS_ONLY",
+        .data$consensus_review_status == "MODEL_ONLY_IN_CONSENSUS_WINDOW" ~
+          "MODEL_COVERAGE_GAP",
+        .data$consensus_review_status == "MAJOR_RANK_GAP" &
+          !.data$consensus_in_action_window ~ "LOW_PRIORITY_DEPTH_GAP",
+        .data$consensus_review_status == "MAJOR_RANK_GAP" &
+          is.na(.data$consensus_abs_projection_z_gap) ~ "MAJOR_RANK_GAP_UNSCORED",
+        .data$consensus_review_status == "MAJOR_RANK_GAP" &
+          .data$consensus_abs_projection_z_gap >= 0.75 ~ "HIGH_SIGNAL_GAP",
+        .data$consensus_review_status == "MAJOR_RANK_GAP" ~ "RANK_COMPRESSION_ONLY",
+        .data$consensus_review_status == "WATCH_RANK_GAP" &
+          .data$consensus_in_action_window &
+          .data$consensus_abs_projection_z_gap >= 0.75 ~ "WATCH_PROJECTION_GAP",
+        .data$consensus_review_status == "WATCH_RANK_GAP" ~ "WATCH_RANK_GAP",
+        TRUE ~ "NO_ACTION"
+      )
+    ) |>
+    dplyr::arrange(
+      factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")),
+      dplyr::coalesce(.data$model_rank, .data$consensus_rank)
+    )
+  coverage <- comparison |>
+    dplyr::group_by(.data$position) |>
+    dplyr::summarise(
+      prediction_season = as.integer(prediction_season),
+      model_rows = sum(!is.na(.data$model_rank)),
+      consensus_rows = sum(!is.na(.data$consensus_rank)),
+      matched_rows = sum(.data$consensus_coverage == "matched"),
+      consensus_match_rate = .data$matched_rows / .data$consensus_rows,
+      model_rows_in_consensus_window = sum(
+        !is.na(.data$model_rank) & .data$model_rank <= .data$consensus_max_rank
+      ),
+      matched_model_window_rows = sum(
+        .data$consensus_coverage == "matched" &
+          .data$model_rank <= .data$consensus_max_rank
+      ),
+      model_window_match_rate =
+        .data$matched_model_window_rows / .data$model_rows_in_consensus_window,
+      team_mismatches = sum(.data$consensus_review_status == "TEAM_MISMATCH"),
+      opponent_mismatches = sum(.data$consensus_review_status == "OPPONENT_MISMATCH"),
+      source_team_competitions = sum(
+        .data$consensus_review_status == "CONSENSUS_TEAM_COMPETITION"
+      ),
+      source_team_conflicts = sum(grepl("TEAM_STARTER_CONFLICT", .data$consensus_review_status)),
+      major_rank_gaps = sum(.data$consensus_review_status == "MAJOR_RANK_GAP"),
+      high_signal_gaps = sum(.data$consensus_signal_priority %in% c(
+        "HIGH_ROLE_OR_SOURCE_CONFLICT", "HIGH_DATA_CONFLICT", "HIGH_SIGNAL_GAP"
+      )),
+      actionable_projection_gaps = sum(
+        .data$consensus_signal_priority == "HIGH_SIGNAL_GAP"
+      ),
+      rank_compression_only = sum(
+        .data$consensus_signal_priority == "RANK_COMPRESSION_ONLY"
+      ),
+      low_priority_depth_gaps = sum(
+        .data$consensus_signal_priority == "LOW_PRIORITY_DEPTH_GAP"
+      ),
+      rank_spearman = safe_spearman(.data$model_rank, .data$consensus_rank),
+      avg_abs_projection_z_gap = safe_mean(.data$consensus_abs_projection_z_gap),
+      status = dplyr::if_else(.data$consensus_match_rate >= 0.95, "PASS", "WATCH"),
+      .groups = "drop"
+    )
+  consensus_columns <- c(
+    "position", "player_key", "consensus_rank", "consensus_player",
+    "consensus_team", "consensus_opponent", "consensus_matchup",
+    "consensus_matchup_stars", "consensus_start_sit", "consensus_projected_fp",
+    "consensus_opportunity", "consensus_efficiency", "consensus_source",
+    "consensus_source_file", "consensus_source_modified"
+  )
+  enriched <- projections |>
+    dplyr::select(-dplyr::any_of(grep(
+      "^consensus_", names(projections), value = TRUE
+    ))) |>
+    dplyr::mutate(
+      position = toupper(as.character(.data$position)),
+      player_key = make_player_key(.data$player)
+    ) |>
+    dplyr::left_join(
+      dplyr::select(consensus, dplyr::all_of(consensus_columns)),
+      by = c("position", "player_key")
+    ) |>
+    dplyr::left_join(
+      comparison |>
+        dplyr::filter(!is.na(.data$model_rank)) |>
+        dplyr::select(dplyr::all_of(c(
+          "position", "player_key", "consensus_fp_gap",
+          "consensus_model_projection_z", "consensus_projection_z",
+          "consensus_projection_z_gap", "consensus_abs_projection_z_gap",
+          "consensus_review_status", "consensus_signal_priority"
+        ))),
+      by = c("position", "player_key")
+    ) |>
+    dplyr::mutate(
+      consensus_rank_gap = .data$rank - .data$consensus_rank,
+      consensus_abs_rank_gap = abs(.data$consensus_rank_gap)
+    )
+  alerts <- comparison |>
+    dplyr::filter(.data$consensus_signal_priority %in% c(
+      "HIGH_ROLE_OR_SOURCE_CONFLICT", "HIGH_DATA_CONFLICT", "CONSENSUS_ONLY",
+      "MODEL_COVERAGE_GAP", "HIGH_SIGNAL_GAP", "MAJOR_RANK_GAP_UNSCORED",
+      "WATCH_PROJECTION_GAP"
+    ))
+  manifest <- data.frame()
+  if (isTRUE(write_output)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    comparison_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_consensus_comparison_", prediction_season, ".csv")
+    )
+    coverage_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_consensus_coverage_audit_", prediction_season, ".csv")
+    )
+    alerts_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_consensus_alerts_", prediction_season, ".csv")
+    )
+    utils::write.csv(comparison, comparison_path, row.names = FALSE, na = "")
+    utils::write.csv(coverage, coverage_path, row.names = FALSE, na = "")
+    utils::write.csv(alerts, alerts_path, row.names = FALSE, na = "")
+    manifest <- data.frame(
+      artifact = c(
+        "week1_consensus_comparison", "week1_consensus_coverage_audit",
+        "week1_consensus_alerts"
+      ),
+      output_path = c(comparison_path, coverage_path, alerts_path),
+      exists = file.exists(c(comparison_path, coverage_path, alerts_path)),
+      stringsAsFactors = FALSE
+    )
+  }
+  result <- list(
+    projections = enriched,
+    consensus = consensus,
+    comparison = comparison,
+    coverage = coverage,
+    alerts = alerts,
+    manifest = manifest
+  )
+  assign("core_wow_week1_consensus_comparison", result, envir = .GlobalEnv)
+  result
+}
+
+wow_refine_te_week1_historical_stats <- function(
+    te,
+    curve,
+    iterations = 8L,
+    blend_weight = 0.60
+) {
+  midpoint_map <- c(
+    "1-6" = 3.5, "7-12" = 9.5, "13-18" = 15.5, "19-24" = 21.5,
+    "25-36" = 30.5, "37-48" = 42.5, "49-72" = 60.5
+  )
+  calibration_stats <- c(
+    "targets", "receptions", "receiving_yards", "receiving_td", "air_yards",
+    "first_read_targets", "end_zone_targets", "receiving_first_downs"
+  )
+  sparse_stats <- c("receiving_td", "end_zone_targets")
+  te$te_week1_refinement_min_stat_multiplier <- 1
+  te$te_week1_refinement_max_stat_multiplier <- 1
+  for (iteration in seq_len(as.integer(iterations))) {
+    te <- te |>
+      dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+      dplyr::mutate(
+        rank = dplyr::row_number(),
+        te_week1_refinement_bucket = wow_week1_te_rank_bucket(.data$rank)
+      )
+    for (stat_name in calibration_stats) {
+      projected_column <- paste0("projected_week1_", stat_name)
+      historical_column <- paste0("historical_avg_", stat_name)
+      if (!projected_column %in% names(te) || !historical_column %in% names(curve)) next
+      current_means <- vapply(names(midpoint_map), function(bucket) {
+        values <- wow_prob_num(te[[projected_column]][te$te_week1_refinement_bucket == bucket])
+        if (length(values) == 0L || !any(is.finite(values))) NA_real_ else mean(values, na.rm = TRUE)
+      }, numeric(1))
+      historical_means <- wow_prob_num(curve[[historical_column]][
+        match(names(midpoint_map), as.character(curve$rank_bucket))
+      ])
+      if (all(is.finite(historical_means))) {
+        historical_means <- -stats::isoreg(seq_along(historical_means), -historical_means)$yf
+      }
+      raw_factor <- historical_means / pmax(current_means, 1e-6)
+      raw_factor[!is.finite(raw_factor)] <- 1
+      raw_factor[is.finite(historical_means) & historical_means <= 1e-6 & current_means > 1e-6] <- 0
+      stat_blend <- if (stat_name %in% sparse_stats) 0.50 else blend_weight
+      lower <- if (stat_name %in% sparse_stats) 0.75 else 0.80
+      upper <- if (stat_name %in% sparse_stats) 1.12 else 1.20
+      bucket_factor <- pmax(pmin(1 + stat_blend * (raw_factor - 1), upper), lower)
+      factor <- stats::approx(
+        x = unname(midpoint_map),
+        y = bucket_factor,
+        xout = te$rank,
+        rule = 2
+      )$y
+      te[[projected_column]] <- pmax(wow_prob_num(te[[projected_column]]) * factor, 0)
+      te$te_week1_refinement_min_stat_multiplier <- pmin(
+        te$te_week1_refinement_min_stat_multiplier, factor, na.rm = TRUE
+      )
+      te$te_week1_refinement_max_stat_multiplier <- pmax(
+        te$te_week1_refinement_max_stat_multiplier, factor, na.rm = TRUE
+      )
+    }
+    te$projected_week1_receptions <- pmin(te$projected_week1_receptions, te$projected_week1_targets)
+    te$projected_week1_first_read_targets <- pmin(
+      te$projected_week1_first_read_targets, te$projected_week1_targets
+    )
+    te$projected_week1_end_zone_targets <- pmin(
+      te$projected_week1_end_zone_targets, te$projected_week1_targets
+    )
+    te$projected_week1_receiving_first_downs <- pmin(
+      te$projected_week1_receiving_first_downs, te$projected_week1_receptions
+    )
+    te$stat_implied_week1_fp_after <- wow_week1_implied_points(te, "TE")
+    te$projected_week1_fp <- te$stat_implied_week1_fp_after
+    te$stat_projection_delta_vs_model <- te$projected_week1_fp - te$model_projected_week1_fp
+    te$stat_projection_gap_after <- te$projected_week1_fp - te$stat_implied_week1_fp_after
+  }
+  te |>
+    dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+    dplyr::mutate(
+      rank = dplyr::row_number(),
+      tier = wow_week1_tier("TE", .data$rank),
+      final_score = .data$projected_week1_fp,
+      te_week1_refinement_iterations = as.integer(iterations)
+    )
+}
+
+wow_apply_te_week1_historical_curve <- function(
+    projections,
+    curve,
+    blend_weight = 0.70,
+    min_multiplier = 0.70,
+    max_multiplier = 1.20
+) {
+  load_model_core_packages()
+  if (!is.data.frame(projections) || !is.data.frame(curve) || nrow(curve) == 0L) {
+    stop("TE historical calibration requires projections and a curve audit.", call. = FALSE)
+  }
+  midpoint_map <- c(
+    "1-6" = 3.5, "7-12" = 9.5, "13-18" = 15.5, "19-24" = 21.5,
+    "25-36" = 30.5, "37-48" = 42.5, "49-72" = 60.5
+  )
+  factor_table <- curve |>
+    dplyr::transmute(
+      te_week1_historical_curve_bucket = as.character(.data$rank_bucket),
+      te_week1_historical_curve_midpoint = unname(.env$midpoint_map[.data$rank_bucket]),
+      te_week1_historical_curve_raw_multiplier =
+        .data$historical_rank_coherent_fantasy_points /
+          pmax(.data$current_avg_fantasy_points, 0.1),
+      te_week1_historical_curve_blended_multiplier =
+        1 + blend_weight * (.data$te_week1_historical_curve_raw_multiplier - 1),
+      te_week1_historical_curve_bucket_multiplier = pmax(
+        pmin(.data$te_week1_historical_curve_blended_multiplier, max_multiplier),
+        min_multiplier
+      )
+    ) |>
+    dplyr::filter(is.finite(.data$te_week1_historical_curve_midpoint)) |>
+    dplyr::arrange(.data$te_week1_historical_curve_midpoint)
+  tail_multiplier <- factor_table |>
+    dplyr::filter(.data$te_week1_historical_curve_bucket == "49-72") |>
+    dplyr::slice_head(n = 1L)
+  if (nrow(tail_multiplier) == 0L) {
+    tail_multiplier <- data.frame(
+      te_week1_historical_curve_bucket = "49-72",
+      te_week1_historical_curve_midpoint = 60.5,
+      te_week1_historical_curve_raw_multiplier = min_multiplier,
+      te_week1_historical_curve_blended_multiplier = min_multiplier,
+      te_week1_historical_curve_bucket_multiplier = min_multiplier,
+      stringsAsFactors = FALSE
+    )
+  }
+  te <- projections |>
+    dplyr::filter(.data$position == "TE") |>
+    dplyr::mutate(
+      te_week1_historical_curve_bucket = wow_week1_te_rank_bucket(.data$rank),
+      te_week1_historical_curve_bucket = dplyr::if_else(
+        .data$te_week1_historical_curve_bucket == "73+", "49-72",
+        .data$te_week1_historical_curve_bucket
+      ),
+      te_pre_historical_curve_rank = .data$rank,
+      te_pre_historical_curve_fp = .data$projected_week1_fp
+    ) |>
+    dplyr::left_join(factor_table, by = "te_week1_historical_curve_bucket") |>
+    dplyr::mutate(
+      te_week1_historical_curve_raw_multiplier = dplyr::coalesce(
+        .data$te_week1_historical_curve_raw_multiplier,
+        tail_multiplier$te_week1_historical_curve_raw_multiplier[[1]]
+      ),
+      te_week1_historical_curve_blended_multiplier = dplyr::coalesce(
+        .data$te_week1_historical_curve_blended_multiplier,
+        tail_multiplier$te_week1_historical_curve_blended_multiplier[[1]]
+      ),
+      te_week1_historical_curve_bucket_multiplier = dplyr::coalesce(
+        .data$te_week1_historical_curve_bucket_multiplier,
+        tail_multiplier$te_week1_historical_curve_bucket_multiplier[[1]]
+      ),
+      te_week1_historical_curve_multiplier = pmax(
+        pmin(
+          stats::approx(
+            x = factor_table$te_week1_historical_curve_midpoint,
+            y = factor_table$te_week1_historical_curve_bucket_multiplier,
+            xout = .data$te_pre_historical_curve_rank,
+            rule = 2
+          )$y,
+          max_multiplier
+        ),
+        min_multiplier
+      )
+    )
+  scalable_stats <- c(
+    "targets", "receptions", "receiving_yards", "receiving_td", "air_yards",
+    "first_read_targets", "end_zone_targets", "receiving_first_downs"
+  )
+  for (stat_name in scalable_stats) {
+    column <- paste0("projected_week1_", stat_name)
+    te[[column]] <- pmax(
+      wow_prob_num(te[[column]]) * te$te_week1_historical_curve_multiplier,
+      0
+    )
+  }
+  te$projected_week1_receptions <- pmin(te$projected_week1_receptions, te$projected_week1_targets)
+  te$projected_week1_first_read_targets <- pmin(
+    te$projected_week1_first_read_targets, te$projected_week1_targets
+  )
+  te$projected_week1_end_zone_targets <- pmin(
+    te$projected_week1_end_zone_targets, te$projected_week1_targets
+  )
+  te$projected_week1_receiving_first_downs <- pmin(
+    te$projected_week1_receiving_first_downs, te$projected_week1_receptions
+  )
+  te$stat_implied_week1_fp_after <- wow_week1_implied_points(te, "TE")
+  te$projected_week1_fp <- te$stat_implied_week1_fp_after
+  te$stat_projection_delta_vs_model <- te$projected_week1_fp - te$model_projected_week1_fp
+  te$stat_projection_gap_after <- te$projected_week1_fp - te$stat_implied_week1_fp_after
+  te <- te |>
+    dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+    dplyr::mutate(
+      rank = dplyr::row_number(),
+      tier = wow_week1_tier("TE", .data$rank),
+      final_score = .data$projected_week1_fp
+    )
+  te <- wow_refine_te_week1_historical_stats(te, curve)
+  probability_columns <- intersect(
+    paste0("prob_week_", names(wow_prob_targets("TE"))),
+    names(te)
+  )
+  for (column in probability_columns) {
+    te[[column]] <- sort(wow_prob_num(te[[column]]), decreasing = TRUE, na.last = TRUE)
+  }
+  out <- dplyr::bind_rows(
+    dplyr::filter(projections, .data$position != "TE"),
+    te
+  ) |>
+    dplyr::arrange(.data$position, .data$rank)
+  calibration_audit <- te |>
+    dplyr::transmute(
+      rank = .data$rank,
+      te_pre_historical_curve_rank = .data$te_pre_historical_curve_rank,
+      player = .data$player,
+      team = .data$team,
+      week1_depth_team = .data$week1_depth_team,
+      te_week1_historical_curve_bucket = .data$te_week1_historical_curve_bucket,
+      te_week1_historical_curve_raw_multiplier = .data$te_week1_historical_curve_raw_multiplier,
+      te_week1_historical_curve_blended_multiplier = .data$te_week1_historical_curve_blended_multiplier,
+      te_week1_historical_curve_bucket_multiplier = .data$te_week1_historical_curve_bucket_multiplier,
+      te_week1_historical_curve_multiplier = .data$te_week1_historical_curve_multiplier,
+      te_week1_refinement_iterations = .data$te_week1_refinement_iterations,
+      te_week1_refinement_min_stat_multiplier = .data$te_week1_refinement_min_stat_multiplier,
+      te_week1_refinement_max_stat_multiplier = .data$te_week1_refinement_max_stat_multiplier,
+      te_pre_historical_curve_fp = .data$te_pre_historical_curve_fp,
+      projected_week1_fp = .data$projected_week1_fp,
+      blend_weight = blend_weight,
+      min_multiplier = min_multiplier,
+      max_multiplier = max_multiplier,
+      stat_identity_gap = abs(.data$projected_week1_fp - wow_week1_implied_points(te, "TE")),
+      status = dplyr::if_else(
+        is.finite(.data$te_week1_historical_curve_multiplier) &
+          .data$te_week1_historical_curve_multiplier >= min_multiplier &
+          .data$te_week1_historical_curve_multiplier <= max_multiplier &
+          .data$stat_identity_gap <= 1e-8,
+        "PASS", "FAIL"
+      )
+    )
+  list(projections = out, audit = calibration_audit, curve_targets = factor_table)
+}
+
+wow_te_week1_context_overrides <- function(prediction_season = 2026L) {
+  data.frame(
+    prediction_season = rep(as.integer(prediction_season), 10L),
+    player_key = make_player_key(c(
+      "George Kittle", "Sam LaPorta", "Colston Loveland", "Tyler Warren",
+      "Terrance Ferguson", "AJ Barner", "Dalton Kincaid", "Chig Okonkwo",
+      "Jake Ferguson", "Isaiah Likely"
+    )),
+    te_week1_context_type = c(
+      "achilles_return_risk", "established_te1_role", "featured_receiving_role",
+      "featured_receiving_role", "depth_chart_role_upgrade", "compressed_tier_uncertainty",
+      "starting_role_volume_upgrade", "compressed_tier_role_downgrade",
+      "starting_role_volume_upgrade", "starting_role_volume_upgrade"
+    ),
+    te_week1_context_multiplier = c(
+      0.83, 1.08, 1.08, 1.10, 1.20, 0.99, 1.04, 0.96, 1.06, 1.35
+    ),
+    te_week1_context_note = c(
+      paste(
+        "Preserve a plausible Week 1 active projection, but apply a modest full-profile",
+        "discount for first-game-back Achilles workload, efficiency, and setback uncertainty."
+      ),
+      "Restore a modest Week 1 target and scoring expectation for Detroit's established starting tight end.",
+      "Increase Week 1 receiving volume for a starting role that the compressed middle tier understates.",
+      "Increase Week 1 receiving volume to reflect an elite preseason profile and Indianapolis starting role.",
+      "Increase Week 1 volume for the possibility that Ferguson leads the Rams tight-end rotation over Colby Parkinson.",
+      paste(
+        "Apply a minimal uncertainty discount so a tightly compressed TE tier does not overstate",
+        "Barner's rank relative to his otherwise reasonable Seattle TE1 projection."
+      ),
+      paste(
+        "Apply a small Week 1 target-share increase so Buffalo's starting tight end is not",
+        "undervalued by the compressed middle tier."
+      ),
+      paste(
+        "Apply a modest Week 1 role discount so the compressed middle tier does not place",
+        "Okonkwo materially above his SOS and OMFG expectation."
+      ),
+      paste(
+        "Apply a small Week 1 receiving-volume increase so Dallas' starting tight end",
+        "lands near his TE12 SOS and strong OMFG expectation."
+      ),
+      paste(
+        "Correct the New York tight-end depth inversion because Likely is listed as",
+        "the starter and should project above the second-string option without matching consensus TE1 pricing."
+      )
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+wow_apply_te_week1_context <- function(
+    projections,
+    prediction_season = 2026L,
+    context = wow_te_week1_context_overrides(prediction_season)
+) {
+  load_model_core_packages()
+  if (!is.data.frame(projections) || nrow(projections) == 0L) {
+    stop("TE Week 1 context requires non-empty projections.", call. = FALSE)
+  }
+  context <- context |>
+    dplyr::filter(.data$prediction_season == as.integer(prediction_season)) |>
+    dplyr::distinct(.data$player_key, .keep_all = TRUE)
+  te <- projections |>
+    dplyr::filter(.data$position == "TE") |>
+    dplyr::mutate(
+      player_key = dplyr::coalesce(as.character(.data$player_key), make_player_key(.data$player)),
+      te_pre_week1_context_rank = .data$rank,
+      te_pre_week1_context_fp = .data$projected_week1_fp
+    ) |>
+    dplyr::left_join(
+      dplyr::select(context, -dplyr::all_of("prediction_season")),
+      by = "player_key"
+    ) |>
+    dplyr::mutate(
+      te_week1_context_multiplier = dplyr::coalesce(.data$te_week1_context_multiplier, 1),
+      te_week1_context_applied = .data$te_week1_context_multiplier != 1
+    )
+  scalable_stats <- c(
+    "targets", "receptions", "receiving_yards", "receiving_td", "air_yards",
+    "first_read_targets", "end_zone_targets", "receiving_first_downs"
+  )
+  for (stat_name in scalable_stats) {
+    column <- paste0("projected_week1_", stat_name)
+    te[[column]] <- pmax(
+      wow_prob_num(te[[column]]) * te$te_week1_context_multiplier,
+      0
+    )
+  }
+  te$projected_week1_receptions <- pmin(te$projected_week1_receptions, te$projected_week1_targets)
+  te$projected_week1_first_read_targets <- pmin(
+    te$projected_week1_first_read_targets, te$projected_week1_targets
+  )
+  te$projected_week1_end_zone_targets <- pmin(
+    te$projected_week1_end_zone_targets, te$projected_week1_targets
+  )
+  te$projected_week1_receiving_first_downs <- pmin(
+    te$projected_week1_receiving_first_downs, te$projected_week1_receptions
+  )
+  te$stat_implied_week1_fp_after <- wow_week1_implied_points(te, "TE")
+  te$projected_week1_fp <- te$stat_implied_week1_fp_after
+  te$stat_projection_delta_vs_model <- te$projected_week1_fp - te$model_projected_week1_fp
+  te$stat_projection_gap_after <- te$projected_week1_fp - te$stat_implied_week1_fp_after
+  te$te_week1_context_stat_identity_gap <- abs(
+    te$projected_week1_fp - wow_week1_implied_points(te, "TE")
+  )
+  te <- te |>
+    dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+    dplyr::mutate(
+      rank = dplyr::row_number(),
+      tier = wow_week1_tier("TE", .data$rank),
+      final_score = .data$projected_week1_fp
+    )
+  probability_columns <- intersect(
+    paste0("prob_week_", names(wow_prob_targets("TE"))),
+    names(te)
+  )
+  for (column in probability_columns) {
+    te[[column]] <- sort(wow_prob_num(te[[column]]), decreasing = TRUE, na.last = TRUE)
+  }
+  out <- dplyr::bind_rows(
+    dplyr::filter(projections, .data$position != "TE"),
+    te
+  ) |>
+    dplyr::arrange(.data$position, .data$rank)
+  audit <- te |>
+    dplyr::filter(.data$te_week1_context_applied) |>
+    dplyr::transmute(
+      player = .data$player,
+      team = .data$team,
+      opponent = .data$opponent,
+      week1_depth_team = .data$week1_depth_team,
+      rank_before = .data$te_pre_week1_context_rank,
+      rank_after = .data$rank,
+      projected_week1_fp_before = .data$te_pre_week1_context_fp,
+      projected_week1_fp_after = .data$projected_week1_fp,
+      te_week1_context_type = .data$te_week1_context_type,
+      te_week1_context_multiplier = .data$te_week1_context_multiplier,
+      te_week1_context_note = .data$te_week1_context_note,
+      stat_identity_gap = .data$te_week1_context_stat_identity_gap,
+      status = dplyr::if_else(.data$stat_identity_gap <= 1e-8, "PASS", "FAIL")
+    )
+  if (nrow(audit) != nrow(context) || any(audit$status != "PASS")) {
+    stop("TE Week 1 context audit failed.", call. = FALSE)
+  }
+  list(projections = out, audit = audit)
+}
+
+wow_apply_te_week1_curve_coherence <- function(
+    projections,
+    curve,
+    iterations = 2L,
+    blend_weight = 0.40,
+    max_step = 0.05
+) {
+  load_model_core_packages()
+  if (!is.data.frame(projections) || !is.data.frame(curve) || nrow(curve) == 0L) {
+    stop("TE curve coherence requires projections and a post-context curve audit.", call. = FALSE)
+  }
+  target_map <- stats::setNames(
+    wow_prob_num(curve$historical_rank_coherent_fantasy_points),
+    as.character(curve$rank_bucket)
+  )
+  te <- projections |>
+    dplyr::filter(.data$position == "TE") |>
+    dplyr::arrange(.data$rank) |>
+    dplyr::mutate(
+      te_pre_curve_coherence_rank = .data$rank,
+      te_pre_curve_coherence_fp = .data$projected_week1_fp,
+      te_curve_coherence_multiplier = 1
+    )
+  scalable_stats <- c(
+    "targets", "receptions", "receiving_yards", "receiving_td", "air_yards",
+    "first_read_targets", "end_zone_targets", "receiving_first_downs"
+  )
+  for (iteration in seq_len(as.integer(iterations))) {
+    te <- te |>
+      dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+      dplyr::mutate(
+        rank = dplyr::row_number(),
+        te_curve_coherence_bucket = wow_week1_te_rank_bucket(.data$rank),
+        te_curve_coherence_bucket = dplyr::if_else(
+          .data$te_curve_coherence_bucket == "73+", "49-72",
+          .data$te_curve_coherence_bucket
+        )
+      )
+    current_means <- te |>
+      dplyr::filter(.data$rank <= 72L) |>
+      dplyr::group_by(.data$te_curve_coherence_bucket) |>
+      dplyr::summarise(
+        current_avg_fp = mean(.data$projected_week1_fp, na.rm = TRUE),
+        .groups = "drop"
+      )
+    current_map <- stats::setNames(
+      current_means$current_avg_fp,
+      current_means$te_curve_coherence_bucket
+    )
+    target <- unname(target_map[te$te_curve_coherence_bucket])
+    current <- unname(current_map[te$te_curve_coherence_bucket])
+    raw_factor <- target / pmax(current, 1e-6)
+    raw_factor[!is.finite(raw_factor)] <- 1
+    step_factor <- pmax(
+      pmin(1 + blend_weight * (raw_factor - 1), 1 + max_step),
+      1 - max_step
+    )
+    for (stat_name in scalable_stats) {
+      column <- paste0("projected_week1_", stat_name)
+      te[[column]] <- pmax(wow_prob_num(te[[column]]) * step_factor, 0)
+    }
+    te$projected_week1_receptions <- pmin(te$projected_week1_receptions, te$projected_week1_targets)
+    te$projected_week1_first_read_targets <- pmin(
+      te$projected_week1_first_read_targets, te$projected_week1_targets
+    )
+    te$projected_week1_end_zone_targets <- pmin(
+      te$projected_week1_end_zone_targets, te$projected_week1_targets
+    )
+    te$projected_week1_receiving_first_downs <- pmin(
+      te$projected_week1_receiving_first_downs, te$projected_week1_receptions
+    )
+    te$te_curve_coherence_multiplier <- te$te_curve_coherence_multiplier * step_factor
+    te$stat_implied_week1_fp_after <- wow_week1_implied_points(te, "TE")
+    te$projected_week1_fp <- te$stat_implied_week1_fp_after
+    te$stat_projection_delta_vs_model <- te$projected_week1_fp - te$model_projected_week1_fp
+    te$stat_projection_gap_after <- te$projected_week1_fp - te$stat_implied_week1_fp_after
+  }
+  te <- te |>
+    dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+    dplyr::mutate(
+      rank = dplyr::row_number(),
+      tier = wow_week1_tier("TE", .data$rank),
+      final_score = .data$projected_week1_fp,
+      te_curve_coherence_iterations = as.integer(iterations)
+    )
+  te$te_curve_coherence_stat_identity_gap <- abs(
+    te$projected_week1_fp - wow_week1_implied_points(te, "TE")
+  )
+  probability_columns <- intersect(
+    paste0("prob_week_", names(wow_prob_targets("TE"))),
+    names(te)
+  )
+  for (column in probability_columns) {
+    te[[column]] <- sort(wow_prob_num(te[[column]]), decreasing = TRUE, na.last = TRUE)
+  }
+  out <- dplyr::bind_rows(
+    dplyr::filter(projections, .data$position != "TE"),
+    te
+  ) |>
+    dplyr::arrange(.data$position, .data$rank)
+  audit <- te |>
+    dplyr::transmute(
+      rank = .data$rank,
+      player = .data$player,
+      team = .data$team,
+      te_pre_curve_coherence_rank = .data$te_pre_curve_coherence_rank,
+      te_pre_curve_coherence_fp = .data$te_pre_curve_coherence_fp,
+      projected_week1_fp = .data$projected_week1_fp,
+      te_curve_coherence_bucket = .data$te_curve_coherence_bucket,
+      te_curve_coherence_multiplier = .data$te_curve_coherence_multiplier,
+      te_curve_coherence_iterations = .data$te_curve_coherence_iterations,
+      stat_identity_gap = .data$te_curve_coherence_stat_identity_gap,
+      status = dplyr::if_else(
+        is.finite(.data$te_curve_coherence_multiplier) &
+          .data$te_curve_coherence_multiplier > 0 &
+          .data$stat_identity_gap <= 1e-8,
+        "PASS", "FAIL"
+      )
+    )
+  if (any(audit$status != "PASS")) {
+    failed <- audit[audit$status != "PASS", , drop = FALSE]
+    stop(
+      paste0(
+        "TE curve coherence audit failed for ", nrow(failed), " row(s): ",
+        paste(utils::head(failed$player, 5L), collapse = ", "),
+        ". First multiplier/gap: ",
+        failed$te_curve_coherence_multiplier[[1]], "/",
+        failed$stat_identity_gap[[1]], "."
+      ),
+      call. = FALSE
+    )
+  }
+  list(projections = out, audit = audit)
+}
+
+wow_apply_nfl_context_brief_week1 <- function(projections, prediction_season = 2026L) {
+  if (!is.data.frame(projections) || nrow(projections) == 0L) {
+    stop("NFL Context Brief Week 1 layer requires non-empty projections.", call. = FALSE)
+  }
+  if (as.integer(prediction_season[[1]]) != 2026L) {
+    return(list(projections = projections, audit = data.frame()))
+  }
+  context <- data.frame(
+    position = c("WR", "WR", "WR", "RB", "RB", "RB", "RB"),
+    player = c(
+      "Keenan Allen", "Josh Downs", "Alec Pierce",
+      "Alvin Kamara", "Travis Etienne", "Najee Harris", "Breece Hall"
+    ),
+    team_override = c("IND", "IND", "IND", "NO", "NO", "NYG", "NYJ"),
+    opponent_override = c("BAL", "BAL", "BAL", "DET", "DET", "DAL", "TEN"),
+    depth_override = c(2L, 1L, 2L, 2L, 1L, 4L, 1L),
+    multiplier = c(1.05, 0.93, 0.93, 0.25, 1.05, 0.55, 0.88),
+    event_type = c(
+      "week1_full_time_role",
+      "target_competition", "target_competition_and_injury",
+      "availability_only_injury", "injury_role_beneficiary",
+      "confirmed_signing_low_initial_role", "week1_injury_risk"
+    ),
+    note = c(
+      paste(
+        "Treat Allen as a full-time Week 1 receiver while Alec Pierce is unlikely to play;",
+        "restore his route and target expectation without changing the broader ROS role."
+      ),
+      "Reduce the prior Week 1 WR1 boost modestly for Keenan Allen's added target competition.",
+      "Apply added target competition separately from the existing availability discount.",
+      "Confirmed MCL sprain; retain only a small probability-weighted Week 1 projection.",
+      paste(
+        "Apply only a modest Week 1 workload benefit from Kamara's expected absence;",
+        "do not treat the backfield change as a full featured-role promotion."
+      ),
+      "Move to the Giants against Dallas and preserve a low depth-4 initial role.",
+      "Apply a modest groin-injury haircut while retaining the coach-stated Week 1 expectation."
+    ),
+    stringsAsFactors = FALSE
+  ) |>
+    dplyr::mutate(player_key = make_player_key(.data$player))
+
+  out <- projections
+  out$nfl_context_brief_week1_applied <- FALSE
+  out$nfl_context_brief_week1_type <- ""
+  out$nfl_context_brief_week1_multiplier <- 1
+  out$nfl_context_brief_week1_fp_before <- NA_real_
+  out$nfl_context_brief_week1_note <- ""
+
+  for (i in seq_len(nrow(context))) {
+    rows <- which(
+      out$position == context$position[[i]] &
+        out$player_key == context$player_key[[i]]
+    )
+    if (length(rows) == 0L) next
+    out$nfl_context_brief_week1_applied[rows] <- TRUE
+    out$nfl_context_brief_week1_type[rows] <- context$event_type[[i]]
+    out$nfl_context_brief_week1_multiplier[rows] <- context$multiplier[[i]]
+    out$nfl_context_brief_week1_fp_before[rows] <- wow_prob_num(out$projected_week1_fp[rows])
+    out$nfl_context_brief_week1_note[rows] <- context$note[[i]]
+    out$team[rows] <- context$team_override[[i]]
+    out$opponent[rows] <- context$opponent_override[[i]]
+    if (is.finite(context$depth_override[[i]])) {
+      out$week1_depth_team[rows] <- as.integer(context$depth_override[[i]])
+    }
+    stats <- if (context$position[[i]] == "RB") {
+      c("rush_attempts", "rush_yards", "rush_td", "targets", "receptions", "receiving_yards", "receiving_td")
+    } else {
+      c(
+        "targets", "receptions", "receiving_yards", "receiving_td", "air_yards",
+        "first_read_targets", "end_zone_targets", "receiving_first_downs",
+        "rush_attempts", "rush_yards", "rush_td"
+      )
+    }
+    for (stat in stats) {
+      column <- paste0("projected_week1_", stat)
+      if (column %in% names(out)) {
+        out[[column]][rows] <- pmax(0, wow_prob_num(out[[column]][rows]) * context$multiplier[[i]])
+      }
+    }
+  }
+
+  rebuilt <- lapply(unique(as.character(out$position)), function(position) {
+    x <- out[out$position == position, , drop = FALSE]
+    if (position %in% c("RB", "WR")) x <- wow_rebuild_week1_derived_stats(x, position)
+    x$stat_implied_week1_fp_after <- wow_week1_implied_points(x, position)
+    x$projected_week1_fp <- x$stat_implied_week1_fp_after
+    x$stat_projection_delta_vs_model <- x$projected_week1_fp - x$model_projected_week1_fp
+    x$stat_projection_gap_after <- x$projected_week1_fp - x$stat_implied_week1_fp_after
+    x <- x |>
+      dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+      dplyr::mutate(
+        rank = dplyr::row_number(),
+        tier = wow_week1_tier(.env$position, .data$rank),
+        final_score = .data$projected_week1_fp
+      )
+    probability_columns <- intersect(
+      paste0("prob_week_", names(wow_prob_targets(position))),
+      names(x)
+    )
+    for (column in probability_columns) {
+      x[[column]] <- sort(wow_prob_num(x[[column]]), decreasing = TRUE, na.last = TRUE)
+    }
+    x
+  })
+  out <- dplyr::bind_rows(rebuilt) |>
+    dplyr::arrange(.data$position, .data$rank)
+
+  audit <- out |>
+    dplyr::filter(.data$nfl_context_brief_week1_applied) |>
+    dplyr::transmute(
+      position = .data$position,
+      prediction_season = as.integer(prediction_season),
+      rank = .data$rank,
+      player = .data$player,
+      team = .data$team,
+      opponent = .data$opponent,
+      week1_depth_team = .data$week1_depth_team,
+      event_type = .data$nfl_context_brief_week1_type,
+      multiplier = .data$nfl_context_brief_week1_multiplier,
+      projected_week1_fp_before = .data$nfl_context_brief_week1_fp_before,
+      projected_week1_fp_after = .data$projected_week1_fp,
+      note = .data$nfl_context_brief_week1_note,
+      status = dplyr::if_else(
+        is.finite(.data$multiplier) & .data$multiplier >= 0 & .data$multiplier <= 1.25 &
+          is.finite(.data$projected_week1_fp_after) & .data$projected_week1_fp_after >= 0,
+        "PASS", "FAIL"
+      )
+    ) |>
+    dplyr::arrange(.data$position, .data$rank)
+  missing <- dplyr::anti_join(
+    context,
+    dplyr::distinct(out, .data$position, .data$player_key),
+    by = c("position", "player_key")
+  )
+  if (nrow(missing) > 0L || nrow(audit) != nrow(context) || any(audit$status != "PASS")) {
+    stop("NFL Context Brief WOW audit failed.", call. = FALSE)
+  }
+  list(projections = out, audit = audit)
+}
+
+wow_apply_final_week1_review_context <- function(projections, prediction_season = 2026L) {
+  if (!is.data.frame(projections) || nrow(projections) == 0L) {
+    stop("Final Week 1 review context requires non-empty projections.", call. = FALSE)
+  }
+  if (as.integer(prediction_season[[1]]) != 2026L) {
+    return(list(projections = projections, audit = data.frame()))
+  }
+  context <- data.frame(
+    position = c("TE", "DST", "DST", "K", "K"),
+    player = c(
+      "George Kittle", "Los Angeles Chargers", "Baltimore Ravens",
+      "Chase McLaughlin", "Harrison Butker"
+    ),
+    multiplier = c(0.88, 1.23, 1.39, 1.14, 0.90),
+    target_rank = c(8L, 10L, 18L, 12L, 16L),
+    review_type = c(
+      "first_game_back_risk", "matchup_upgrade", "consensus_midpoint",
+      "consensus_midpoint", "consensus_midpoint"
+    ),
+    note = c(
+      "Move Kittle down only a couple of places for first-game-back Achilles risk if active.",
+      "Raise the Chargers defense for a favorable Week 1 matchup while retaining model input as the base.",
+      "Move Baltimore toward the midpoint between the model and consensus rather than fully adopting either rank.",
+      "Move McLaughlin toward the midpoint between the model and consensus rankings.",
+      "Move Butker toward the midpoint between the model and consensus rankings."
+    ),
+    stringsAsFactors = FALSE
+  ) |>
+    dplyr::mutate(player_key = make_player_key(.data$player))
+
+  out <- projections
+  out$final_week1_review_applied <- FALSE
+  out$final_week1_review_type <- ""
+  out$final_week1_review_multiplier <- 1
+  out$final_week1_review_target_rank <- NA_integer_
+  out$final_week1_review_rank_before <- NA_integer_
+  out$final_week1_review_fp_before <- NA_real_
+  out$final_week1_review_note <- ""
+
+  stat_map <- list(
+    TE = c(
+      "targets", "receptions", "receiving_yards", "receiving_td", "air_yards",
+      "first_read_targets", "end_zone_targets", "receiving_first_downs",
+      "rush_attempts", "rush_yards", "rush_td"
+    ),
+    K = c("fga", "fgm", "fga_40_49", "fgm_40_49", "fga_50_plus", "fgm_50_plus", "xpa", "xpm"),
+    DST = c("sacks", "interceptions", "fumbles", "defensive_tds", "dst_fantasy_points")
+  )
+
+  for (i in seq_len(nrow(context))) {
+    rows <- which(
+      out$position == context$position[[i]] &
+        out$player_key == context$player_key[[i]]
+    )
+    if (length(rows) == 0L) next
+    out$final_week1_review_applied[rows] <- TRUE
+    out$final_week1_review_type[rows] <- context$review_type[[i]]
+    out$final_week1_review_multiplier[rows] <- context$multiplier[[i]]
+    out$final_week1_review_target_rank[rows] <- context$target_rank[[i]]
+    out$final_week1_review_rank_before[rows] <- as.integer(out$rank[rows])
+    out$final_week1_review_fp_before[rows] <- wow_prob_num(out$projected_week1_fp[rows])
+    out$final_week1_review_note[rows] <- context$note[[i]]
+    for (stat in stat_map[[context$position[[i]]]]) {
+      column <- paste0("projected_week1_", stat)
+      if (column %in% names(out)) {
+        out[[column]][rows] <- pmax(0, wow_prob_num(out[[column]][rows]) * context$multiplier[[i]])
+      }
+    }
+  }
+
+  rebuilt <- lapply(unique(as.character(out$position)), function(position) {
+    x <- out[out$position == position, , drop = FALSE]
+    x$stat_implied_week1_fp_after <- wow_week1_implied_points(x, position)
+    x$projected_week1_fp <- x$stat_implied_week1_fp_after
+    x$stat_projection_delta_vs_model <- x$projected_week1_fp - x$model_projected_week1_fp
+    x$stat_projection_gap_after <- x$projected_week1_fp - x$stat_implied_week1_fp_after
+    x <- x |>
+      dplyr::arrange(dplyr::desc(.data$projected_week1_fp), .data$player) |>
+      dplyr::mutate(
+        rank = dplyr::row_number(),
+        tier = wow_week1_tier(.env$position, .data$rank),
+        final_score = .data$projected_week1_fp
+      )
+    probability_columns <- intersect(
+      paste0("prob_week_", names(wow_prob_targets(position))),
+      names(x)
+    )
+    for (column in probability_columns) {
+      x[[column]] <- sort(wow_prob_num(x[[column]]), decreasing = TRUE, na.last = TRUE)
+    }
+    x
+  })
+  out <- dplyr::bind_rows(rebuilt) |>
+    dplyr::arrange(.data$position, .data$rank)
+
+  audit <- out |>
+    dplyr::filter(.data$final_week1_review_applied) |>
+    dplyr::transmute(
+      position = .data$position,
+      prediction_season = as.integer(prediction_season),
+      player = .data$player,
+      rank_before = .data$final_week1_review_rank_before,
+      rank_after = .data$rank,
+      target_rank = .data$final_week1_review_target_rank,
+      projected_week1_fp_before = .data$final_week1_review_fp_before,
+      projected_week1_fp_after = .data$projected_week1_fp,
+      multiplier = .data$final_week1_review_multiplier,
+      review_type = .data$final_week1_review_type,
+      note = .data$final_week1_review_note,
+      stat_identity_gap = abs(.data$projected_week1_fp - .data$stat_implied_week1_fp_after),
+      status = dplyr::if_else(
+        is.finite(.data$multiplier) & .data$multiplier >= 0.75 & .data$multiplier <= 1.50 &
+          abs(.data$rank - .data$final_week1_review_target_rank) <= 2L &
+          abs(.data$projected_week1_fp - .data$stat_implied_week1_fp_after) <= 1e-8,
+        "PASS", "FAIL"
+      )
+    ) |>
+    dplyr::arrange(.data$position, .data$rank_after)
+  missing <- dplyr::anti_join(
+    context,
+    dplyr::distinct(out, .data$position, .data$player_key),
+    by = c("position", "player_key")
+  )
+  if (nrow(missing) > 0L || nrow(audit) != nrow(context) || any(audit$status != "PASS")) {
+    stop("Final Week 1 review context audit failed.", call. = FALSE)
+  }
+  list(projections = out, audit = audit)
+}
+
 run_core_wow_week1_production <- function(
     prediction_season = 2026L,
     positions = c("QB", "RB", "WR", "TE", "K", "DST"),
-    sos_production_path = file.path(wow_production_output_dir(), paste0("core_sos_production_", prediction_season, ".csv")),
+    sos_production_path = file.path(wow_production_output_dir(), paste0("core_sos_calibrated_rankings_", prediction_season, ".csv")),
     week1_schedule = NULL,
     write_output = TRUE,
     output_dir = wow_production_output_dir()
@@ -9229,41 +13915,79 @@ run_core_wow_week1_production <- function(
       call. = FALSE
     )
   }
-  
+
   position_results <- list()
   backtest_rows <- list()
   tuning_rows <- list()
-  
+  matchup_rows <- list()
+
   for (position in positions) {
     historical <- run_position_wow_week1_backtest(position)
     train <- historical$frame
+    position_matchup <- wow_build_week1_matchup_context(position) |>
+      dplyr::filter(.data$prediction_season == .env$prediction_season)
     raw_test <- sos_production[sos_production$position == position, , drop = FALSE]
+    if ("active_projection_pool" %in% names(raw_test)) {
+      raw_test <- raw_test[is.na(raw_test$active_projection_pool) | raw_test$active_projection_pool, , drop = FALSE]
+    }
+    raw_test$sos_handoff_team <- normalize_team_abbr(dplyr::coalesce(raw_test$next_team, raw_test$current_team))
+    raw_test <- raw_test[
+      !is.na(raw_test$sos_handoff_team) & raw_test$sos_handoff_team != "" & raw_test$sos_handoff_team != "FA",
+      , drop = FALSE
+    ]
     if (nrow(raw_test) == 0L) stop("No SOS production rows available for ", position, call. = FALSE)
-    
+
+    raw_test$sos_handoff_rank <- dplyr::coalesce(
+      if ("display_rank" %in% names(raw_test)) safe_numeric(raw_test$display_rank) else rep(NA_real_, nrow(raw_test)),
+      if ("rank" %in% names(raw_test)) safe_numeric(raw_test$rank) else rep(NA_real_, nrow(raw_test))
+    )
+    raw_test$sos_handoff_score <- dplyr::coalesce(
+      if ("display_score" %in% names(raw_test)) safe_numeric(raw_test$display_score) else rep(NA_real_, nrow(raw_test)),
+      if ("final_score" %in% names(raw_test)) safe_numeric(raw_test$final_score) else rep(NA_real_, nrow(raw_test))
+    )
+    raw_test$sos_handoff_board_score <- dplyr::coalesce(
+      if ("manual_adjusted_projection_score" %in% names(raw_test)) safe_numeric(raw_test$manual_adjusted_projection_score) else rep(NA_real_, nrow(raw_test)),
+      if ("board_score" %in% names(raw_test)) safe_numeric(raw_test$board_score) else rep(NA_real_, nrow(raw_test)),
+      raw_test$sos_handoff_score
+    )
+    raw_test$sos_handoff_omfg <- dplyr::coalesce(
+      if ("official_omfg" %in% names(raw_test)) safe_numeric(raw_test$official_omfg) else rep(NA_real_, nrow(raw_test)),
+      if ("preseason_omfg" %in% names(raw_test)) safe_numeric(raw_test$preseason_omfg) else rep(NA_real_, nrow(raw_test))
+    )
+    raw_test$sos_handoff_ppg <- dplyr::coalesce(
+      if ("adjusted_projected_ppg" %in% names(raw_test)) safe_numeric(raw_test$adjusted_projected_ppg) else rep(NA_real_, nrow(raw_test)),
+      if ("anchor_ppg" %in% names(raw_test)) safe_numeric(raw_test$anchor_ppg) else rep(NA_real_, nrow(raw_test))
+    )
+
     test <- raw_test |>
       dplyr::transmute(
         position = .env$position,
         season = .env$prediction_season,
         player = as.character(.data$player),
         player_key = make_player_key(.data$player),
-        team = normalize_team_abbr(dplyr::coalesce(.data$next_team, .data$current_team)),
-        sos_rank = wow_prob_num(.data$rank),
+        team = .data$sos_handoff_team,
+        sos_rank = wow_prob_num(.data$sos_handoff_rank),
         sos_tier = as.character(.data$tier),
-        sos_final_score = wow_prob_num(.data$final_score),
-        sos_board_score = wow_prob_num(.data$board_score),
-        preseason_omfg = wow_prob_num(.data$preseason_omfg),
-        anchor_ppg = wow_prob_num(.data$anchor_ppg)
+        sos_final_score = wow_prob_num(.data$sos_handoff_score),
+        sos_board_score = wow_prob_num(.data$sos_handoff_board_score),
+        preseason_omfg = wow_prob_num(.data$sos_handoff_omfg),
+        anchor_ppg = wow_prob_num(.data$sos_handoff_ppg)
       ) |>
       dplyr::mutate(
         field_size = dplyr::n(),
         sos_rank_score_0to100 = wow_prob_rank_score(.data$sos_rank, .data$field_size)
+      ) |>
+      dplyr::left_join(schedule, by = "team") |>
+      dplyr::left_join(
+        dplyr::select(position_matchup, -dplyr::all_of("position")),
+        by = c("season" = "prediction_season", "opponent" = "opponent")
       )
     scores <- wow_week1_candidate_scores(train, test)
     selected_model <- historical$selected_model
     selected_score <- scores[[selected_model]]
-    projected_fp <- scores$projected_week1_fp
+    projected_fp <- wow_week1_score_to_points(train, selected_model, selected_score)
     projected_fp[!is.finite(projected_fp)] <- test$anchor_ppg[!is.finite(projected_fp)]
-    
+
     out <- test |>
       dplyr::mutate(
         production_mode = "preseason_week1",
@@ -9280,10 +14004,9 @@ run_core_wow_week1_production <- function(
         final_score = .data$week1_score,
         weekly_board_score = .data$sos_board_score,
         in_season_omfg = .data$preseason_omfg
-      ) |>
-      dplyr::left_join(schedule, by = "team")
-    
-    if (position %in% c("QB", "RB", "WR", "TE")) {
+      )
+
+    if (position %in% c("QB", "RB", "WR", "TE", "K", "DST")) {
       prob_train <- train |>
         dplyr::transmute(
           rank_score_0to100 = .data$sos_rank_score_0to100,
@@ -9313,34 +14036,214 @@ run_core_wow_week1_production <- function(
       ordered_targets <- names(sort(unlist(thresholds)))
       out <- wow_prob_enforce_nested(out, paste0("prob_week_", ordered_targets))
     }
-    
+
     position_results[[position]] <- out |>
       dplyr::select(
         dplyr::all_of(c(
           "position", "production_mode", "season", "feature_week", "predicts_week",
           "rank", "tier", "player", "team", "opponent", "selected_model",
-          "projected_week1_fp", "final_score", "preseason_omfg", "sos_rank", "sos_tier"
+          "projected_week1_fp", "final_score", "preseason_omfg", "sos_rank", "sos_tier",
+          "prior_season", "prior_season_games", "opponent_position_fp_allowed",
+          "opponent_position_fp_allowed_shrunk", "matchup_score_0to100"
         )),
         dplyr::starts_with("prob_week_")
       )
     backtest_rows[[position]] <- historical$metrics
     tuning_rows[[position]] <- historical$summary |>
       dplyr::mutate(selected_model = .data$candidate == .env$selected_model)
+    matchup_rows[[position]] <- position_matchup
   }
-  
+
   master <- dplyr::bind_rows(position_results) |>
     dplyr::arrange(.data$position, .data$rank)
   backtest <- dplyr::bind_rows(backtest_rows) |>
     dplyr::arrange(.data$position, .data$test_season, .data$candidate)
   tuning <- dplyr::bind_rows(tuning_rows) |>
     dplyr::arrange(.data$position, dplyr::desc(.data$selected_model), dplyr::desc(.data$combined_score))
+  matchup_context <- dplyr::bind_rows(matchup_rows) |>
+    dplyr::arrange(.data$position, dplyr::desc(.data$matchup_score_0to100))
+  stat_projection <- build_core_wow_week1_stat_projection_layer(
+    week1_production = master,
+    prediction_season = prediction_season,
+    write_output = FALSE,
+    output_dir = output_dir
+  )
+  master <- stat_projection$projections
+  rb_precalibration_audit <- build_rb_wow_week1_usage_audit(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = FALSE
+  )
+  rb_historical_calibration <- wow_apply_rb_week1_historical_curve(
+    projections = master,
+    curve = rb_precalibration_audit$curve
+  )
+  master <- rb_historical_calibration$projections
+  rb_week1_context <- wow_apply_rb_week1_context(
+    projections = master,
+    prediction_season = prediction_season
+  )
+  master <- rb_week1_context$projections
+  wr_precalibration_audit <- build_wr_wow_week1_usage_audit(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = FALSE
+  )
+  wr_historical_calibration <- wow_apply_wr_week1_historical_curve(
+    projections = master,
+    curve = wr_precalibration_audit$curve
+  )
+  master <- wr_historical_calibration$projections
+  wr_week1_context <- wow_apply_wr_week1_context(
+    projections = master,
+    prediction_season = prediction_season
+  )
+  master <- wr_week1_context$projections
+  te_precalibration_audit <- build_te_wow_week1_usage_audit(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = FALSE
+  )
+  te_historical_calibration <- wow_apply_te_week1_historical_curve(
+    projections = master,
+    curve = te_precalibration_audit$curve
+  )
+  master <- te_historical_calibration$projections
+  te_week1_context <- wow_apply_te_week1_context(
+    projections = master,
+    prediction_season = prediction_season
+  )
+  master <- te_week1_context$projections
+  te_precoherence_audit <- build_te_wow_week1_usage_audit(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = FALSE
+  )
+  te_curve_coherence <- wow_apply_te_week1_curve_coherence(
+    projections = master,
+    curve = te_precoherence_audit$curve
+  )
+  master <- te_curve_coherence$projections
+  dst_week1_context <- wow_apply_dst_week1_context(
+    projections = master,
+    prediction_season = prediction_season
+  )
+  master <- dst_week1_context$projections
+  nfl_context_brief_week1 <- wow_apply_nfl_context_brief_week1(
+    projections = master,
+    prediction_season = prediction_season
+  )
+  master <- nfl_context_brief_week1$projections
+  if (isTRUE(write_output) && nrow(nfl_context_brief_week1$audit) > 0L) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    utils::write.csv(
+      nfl_context_brief_week1$audit,
+      file.path(output_dir, paste0("core_wow_week1_nfl_context_brief_audit_", prediction_season, ".csv")),
+      row.names = FALSE,
+      na = ""
+    )
+  }
+  final_week1_review_context <- wow_apply_final_week1_review_context(
+    projections = master,
+    prediction_season = prediction_season
+  )
+  master <- final_week1_review_context$projections
+  consensus_comparison <- build_core_wow_week1_consensus_comparison(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = write_output,
+    output_dir = output_dir
+  )
+  master <- consensus_comparison$projections
+  stat_projection$projections <- master
+  position_results <- lapply(positions, function(position) {
+    master |>
+      dplyr::filter(.data$position == .env$position) |>
+      dplyr::arrange(.data$rank)
+  })
+  names(position_results) <- positions
   audit <- build_core_wow_production_audit(master, prediction_season, feature_week = 0L)
   audit$missing_opponents <- vapply(audit$position, function(position) {
     sum(is.na(master$opponent[master$position == position]) | master$opponent[master$position == position] == "")
   }, integer(1))
+  audit$missing_matchup_context <- vapply(audit$position, function(position) {
+    sum(!is.finite(master$matchup_score_0to100[master$position == position]))
+  }, integer(1))
+  audit$projected_points_rank_violations <- vapply(audit$position, function(position) {
+    rows <- master[master$position == position, , drop = FALSE]
+    rows <- rows[order(rows$rank), , drop = FALSE]
+    sum(diff(wow_prob_num(rows$projected_week1_fp)) > 1e-9, na.rm = TRUE)
+  }, integer(1))
   audit$status[audit$missing_opponents > 0L] <- "FAIL"
+  audit$status[audit$missing_matchup_context > 0L] <- "FAIL"
+  audit$status[audit$projected_points_rank_violations > 0L] <- "FAIL"
   if (any(audit$status != "PASS")) stop("Week 1 WOW production audit failed.", call. = FALSE)
-  
+  review <- build_core_wow_week1_review_board(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = write_output
+  )
+  qb_passing_audit <- build_qb_wow_week1_passing_audit(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = write_output
+  )
+  rb_usage_audit <- build_rb_wow_week1_usage_audit(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = write_output
+  )
+  wr_usage_audit <- build_wr_wow_week1_usage_audit(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = write_output
+  )
+  te_usage_audit <- build_te_wow_week1_usage_audit(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = write_output
+  )
+  k_usage_audit <- build_k_wow_week1_usage_audit(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = write_output
+  )
+  dst_usage_audit <- build_dst_wow_week1_usage_audit(
+    projections = master,
+    prediction_season = prediction_season,
+    write_output = write_output
+  )
+  actual_finish_reference <- dplyr::bind_rows(
+    qb_passing_audit$finish_curve,
+    rb_usage_audit$finish_curve,
+    wr_usage_audit$finish_curve,
+    te_usage_audit$finish_curve,
+    k_usage_audit$finish_curve,
+    dst_usage_audit$finish_curve
+  ) |>
+    dplyr::arrange(
+      factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")),
+      suppressWarnings(as.numeric(sub("-.*|\\+", "", .data$finish_bucket)))
+    )
+  forecast_tier_activity <- dplyr::bind_rows(
+    dplyr::mutate(qb_passing_audit$curve, position = "QB"),
+    dplyr::mutate(rb_usage_audit$curve, position = "RB"),
+    dplyr::mutate(wr_usage_audit$curve, position = "WR"),
+    dplyr::mutate(te_usage_audit$curve, position = "TE"),
+    dplyr::mutate(k_usage_audit$curve, position = "K"),
+    dplyr::mutate(dst_usage_audit$curve, position = "DST")
+  ) |>
+    dplyr::select(
+      "position", "rank_bucket", "historical_forecast_rows",
+      "historical_active_rows", "historical_inactive_rows", "historical_active_rate",
+      "historical_all_row_avg_fantasy_points", "historical_avg_fantasy_points",
+      "current_avg_fantasy_points", dplyr::everything()
+    ) |>
+    dplyr::arrange(
+      factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")),
+      suppressWarnings(as.numeric(sub("-.*|\\+", "", .data$rank_bucket)))
+    )
+
   if (write_output) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     master_path <- file.path(output_dir, paste0("core_wow_week1_production_", prediction_season, ".csv"))
@@ -9348,21 +14251,144 @@ run_core_wow_week1_production <- function(
     backtest_path <- file.path(output_dir, paste0("core_wow_week1_backtest_2022_2025.csv"))
     tuning_path <- file.path(output_dir, paste0("core_wow_week1_tuning_2022_2025.csv"))
     schedule_path <- file.path(output_dir, paste0("core_wow_week1_schedule_", prediction_season, ".csv"))
+    matchup_path <- file.path(output_dir, paste0("core_wow_week1_matchup_context_", prediction_season, ".csv"))
+    stat_projection_path <- file.path(output_dir, paste0("core_wow_week1_stat_projections_", prediction_season, ".csv"))
+    stat_audit_path <- file.path(output_dir, paste0("core_wow_week1_stat_projection_audit_", prediction_season, ".csv"))
+    stat_backtest_path <- file.path(output_dir, "core_wow_week1_stat_backtest_metrics_2023_2025.csv")
+    qb_starter_gate_path <- file.path(output_dir, paste0("core_wow_week1_qb_starter_gate_audit_", prediction_season, ".csv"))
+    rb_historical_calibration_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_rb_historical_curve_calibration_", prediction_season, ".csv")
+    )
+    rb_week1_context_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_rb_context_audit_", prediction_season, ".csv")
+    )
+    wr_historical_calibration_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_wr_historical_curve_calibration_", prediction_season, ".csv")
+    )
+    wr_week1_context_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_wr_context_audit_", prediction_season, ".csv")
+    )
+    te_historical_calibration_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_te_historical_curve_calibration_", prediction_season, ".csv")
+    )
+    te_week1_context_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_te_context_audit_", prediction_season, ".csv")
+    )
+    te_curve_coherence_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_te_curve_coherence_audit_", prediction_season, ".csv")
+    )
+    dst_week1_context_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_dst_context_audit_", prediction_season, ".csv")
+    )
+    final_week1_review_context_path <- file.path(
+      output_dir,
+      paste0("core_wow_week1_final_review_context_audit_", prediction_season, ".csv")
+    )
+    actual_finish_reference_path <- file.path(
+      output_dir,
+      "core_wow_week1_actual_finish_reference_2023_2025.csv"
+    )
+    forecast_tier_activity_path <- file.path(
+      output_dir,
+      "core_wow_week1_forecast_tier_activity_2023_2025.csv"
+    )
     utils::write.csv(master, master_path, row.names = FALSE, na = "")
     utils::write.csv(audit, audit_path, row.names = FALSE, na = "")
     utils::write.csv(backtest, backtest_path, row.names = FALSE, na = "")
     utils::write.csv(tuning, tuning_path, row.names = FALSE, na = "")
     utils::write.csv(schedule, schedule_path, row.names = FALSE, na = "")
+    utils::write.csv(matchup_context, matchup_path, row.names = FALSE, na = "")
+    utils::write.csv(stat_projection$projections, stat_projection_path, row.names = FALSE, na = "")
+    utils::write.csv(stat_projection$audit, stat_audit_path, row.names = FALSE, na = "")
+    utils::write.csv(stat_projection$backtest, stat_backtest_path, row.names = FALSE, na = "")
+    utils::write.csv(stat_projection$qb_starter_gate_audit, qb_starter_gate_path, row.names = FALSE, na = "")
+    utils::write.csv(
+      rb_historical_calibration$audit,
+      rb_historical_calibration_path,
+      row.names = FALSE,
+      na = ""
+    )
+    utils::write.csv(rb_week1_context$audit, rb_week1_context_path, row.names = FALSE, na = "")
+    utils::write.csv(
+      wr_historical_calibration$audit,
+      wr_historical_calibration_path,
+      row.names = FALSE,
+      na = ""
+    )
+    utils::write.csv(wr_week1_context$audit, wr_week1_context_path, row.names = FALSE, na = "")
+    utils::write.csv(
+      te_historical_calibration$audit,
+      te_historical_calibration_path,
+      row.names = FALSE,
+      na = ""
+    )
+    utils::write.csv(te_week1_context$audit, te_week1_context_path, row.names = FALSE, na = "")
+    utils::write.csv(te_curve_coherence$audit, te_curve_coherence_path, row.names = FALSE, na = "")
+    utils::write.csv(dst_week1_context$audit, dst_week1_context_path, row.names = FALSE, na = "")
+    utils::write.csv(
+      final_week1_review_context$audit,
+      final_week1_review_context_path,
+      row.names = FALSE,
+      na = ""
+    )
+    utils::write.csv(
+      actual_finish_reference,
+      actual_finish_reference_path,
+      row.names = FALSE,
+      na = ""
+    )
+    utils::write.csv(
+      forecast_tier_activity,
+      forecast_tier_activity_path,
+      row.names = FALSE,
+      na = ""
+    )
     manifest <- data.frame(
-      artifact = c("week1_master", "week1_audit", "week1_backtest", "week1_tuning", "week1_schedule"),
-      output_path = c(master_path, audit_path, backtest_path, tuning_path, schedule_path),
+      artifact = c(
+        "week1_master", "week1_audit", "week1_backtest", "week1_tuning",
+        "week1_schedule", "week1_matchup_context", "week1_stat_projections",
+        "week1_stat_projection_audit", "week1_stat_backtest", "week1_qb_starter_gate_audit",
+        "week1_rb_historical_curve_calibration", "week1_rb_context_audit",
+        "week1_wr_historical_curve_calibration", "week1_wr_context_audit",
+        "week1_te_historical_curve_calibration", "week1_te_context_audit",
+        "week1_te_curve_coherence_audit", "week1_dst_context_audit",
+        "week1_final_review_context_audit",
+        "week1_actual_finish_reference",
+        "week1_forecast_tier_activity"
+      ),
+      output_path = c(
+        master_path, audit_path, backtest_path, tuning_path, schedule_path,
+        matchup_path, stat_projection_path, stat_audit_path, stat_backtest_path,
+        qb_starter_gate_path, rb_historical_calibration_path, rb_week1_context_path,
+        wr_historical_calibration_path, wr_week1_context_path,
+        te_historical_calibration_path, te_week1_context_path,
+        te_curve_coherence_path, dst_week1_context_path,
+        final_week1_review_context_path,
+        actual_finish_reference_path, forecast_tier_activity_path
+      ),
       stringsAsFactors = FALSE
     ) |>
       dplyr::mutate(exists = file.exists(.data$output_path))
+    manifest <- dplyr::bind_rows(manifest, review$manifest)
+    manifest <- dplyr::bind_rows(manifest, qb_passing_audit$manifest)
+    manifest <- dplyr::bind_rows(manifest, rb_usage_audit$manifest)
+    manifest <- dplyr::bind_rows(manifest, wr_usage_audit$manifest)
+    manifest <- dplyr::bind_rows(manifest, te_usage_audit$manifest)
+    manifest <- dplyr::bind_rows(manifest, k_usage_audit$manifest)
+    manifest <- dplyr::bind_rows(manifest, dst_usage_audit$manifest)
+    manifest <- dplyr::bind_rows(manifest, consensus_comparison$manifest)
   } else {
     manifest <- data.frame()
   }
-  
+
   result <- list(
     prediction_season = prediction_season,
     positions = position_results,
@@ -9371,6 +14397,32 @@ run_core_wow_week1_production <- function(
     backtest = backtest,
     tuning = tuning,
     schedule = schedule,
+    matchup_context = matchup_context,
+    stat_projection = stat_projection,
+    review = review,
+    qb_passing_audit = qb_passing_audit,
+    rb_precalibration_audit = rb_precalibration_audit,
+    rb_historical_calibration = rb_historical_calibration,
+    rb_week1_context = rb_week1_context,
+    rb_usage_audit = rb_usage_audit,
+    wr_precalibration_audit = wr_precalibration_audit,
+    wr_historical_calibration = wr_historical_calibration,
+    wr_week1_context = wr_week1_context,
+    wr_usage_audit = wr_usage_audit,
+    te_precalibration_audit = te_precalibration_audit,
+    te_historical_calibration = te_historical_calibration,
+    te_week1_context = te_week1_context,
+    te_precoherence_audit = te_precoherence_audit,
+    te_curve_coherence = te_curve_coherence,
+    te_usage_audit = te_usage_audit,
+    k_usage_audit = k_usage_audit,
+    dst_week1_context = dst_week1_context,
+    dst_usage_audit = dst_usage_audit,
+    nfl_context_brief_week1 = nfl_context_brief_week1,
+    final_week1_review_context = final_week1_review_context,
+    consensus_comparison = consensus_comparison,
+    actual_finish_reference = actual_finish_reference,
+    forecast_tier_activity = forecast_tier_activity,
     manifest = manifest
   )
   assign("core_wow_week1_production", result, envir = .GlobalEnv)
@@ -9383,3 +14435,13 @@ message("WOW probability walk-forward: run_core_wow_probability_walk_forward()")
 message("WOW QB probability calibration: build_qb_wow_probability_calibration_profile()")
 message("WOW production runner: run_core_wow_production()")
 message("WOW Week 1 production runner: run_core_wow_week1_production()")
+message("WOW Week 1 stat projection: build_core_wow_week1_stat_projection_layer()")
+message("WOW Week 1 review board: build_core_wow_week1_review_board()")
+message("WOW QB passing audit: build_qb_wow_week1_passing_audit()")
+message("WOW RB usage audit: build_rb_wow_week1_usage_audit()")
+message("WOW WR usage audit: build_wr_wow_week1_usage_audit()")
+message("WOW TE usage audit: build_te_wow_week1_usage_audit()")
+message("WOW K usage audit: build_k_wow_week1_usage_audit()")
+message("WOW DST usage audit: build_dst_wow_week1_usage_audit()")
+message("WOW DST context: wow_apply_dst_week1_context()")
+message("WOW consensus comparison: build_core_wow_week1_consensus_comparison()")
