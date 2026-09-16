@@ -15,7 +15,7 @@ current_source_through_week <- 1L
 auto_source_season_scripts <- FALSE
 reuse_historical_sources <- getOption("model_combine_reuse_history", TRUE)
 combine_output_dir <- getOption("model_combine_history_dir",
-                                "C:/Users/danma/OneDrive/Documents/NFLfastR/outputs/model_sources_2021_2025")
+  "C:/Users/danma/OneDrive/Documents/NFLfastR/outputs/model_sources_2021_2025")
 
 season_script_candidates <- list(
   `2021` = c("Weekly 2021 data"),
@@ -140,9 +140,9 @@ position_configs <- list(
 
 # Names match the completed-data outputs of Weekly 2026 data.R.
 current_weekly_objects <- c(QB = "qb_sch_26", RB = "rb_sch_26",
-                            WR = "wr_sch_26", TE = "TE_sch_26", K = "K_sch_26", DST = "dst_sch_26")
+  WR = "wr_sch_26", TE = "TE_sch_26", K = "K_sch_26", DST = "dst_sch_26")
 current_avg_objects <- c(QB = "qb_sch_26_avg", RB = "rb_sch_26_avg",
-                         WR = "wr_sch_26_avg", TE = "te_sch_26_avg", K = "k_sch_26_avg", DST = "dst_sch_26_avg")
+  WR = "wr_sch_26_avg", TE = "te_sch_26_avg", K = "k_sch_26_avg", DST = "dst_sch_26_avg")
 for (position_name in names(position_configs)) {
   position_configs[[position_name]]$weekly[["2026"]] <- current_weekly_objects[[position_name]]
   position_configs[[position_name]]$avg[["2026"]] <- current_avg_objects[[position_name]]
@@ -312,7 +312,7 @@ write_position_csv <- function(df, file_name) {
 }
 
 audit_current_dst_sources <- function(weekly, avg,
-                                      data_dir = "C:/Users/danma/OneDrive/Documents/NFLfastR/2026 data") {
+    data_dir = "C:/Users/danma/OneDrive/Documents/NFLfastR/2026 data") {
   normalize <- function(x) {
     x <- toupper(trimws(as.character(x)))
     alias <- c(ARZ="ARI", BLT="BAL", CLV="CLE", HST="HOU", LA="LAR", JAC="JAX", WSH="WAS")
@@ -339,7 +339,7 @@ audit_current_dst_sources <- function(weekly, avg,
     }
     pa <- e$PTs_allw_team
     pa_points <- ifelse(pa==0,5,ifelse(pa<=6,4,ifelse(pa<=13,3,ifelse(pa<=17,1,
-                                                                      ifelse(pa<=27,0,ifelse(pa<=34,-1,ifelse(pa<=45,-3,-5)))))))
+      ifelse(pa<=27,0,ifelse(pa<=34,-1,ifelse(pa<=45,-3,-5)))))))
     e$DST_ftpts <- e$SACK_def_team + 2*(e$INT_def_team + e$FUM_def_team + e$safety_def_team) +
       6*(e$Def_TDs_team + e$K_TDs_team + e$P_TDs_team) + pa_points
     expected[[as.character(week)]] <- e
@@ -376,6 +376,9 @@ audit_current_dst_sources <- function(weekly, avg,
 }
 
 prepare_current_sources <- function(env = .GlobalEnv) {
+  helper_root <- getOption("model_project_root", "C:/Users/danma/OneDrive/Documents/New project")
+  source(file.path(helper_root,"model","current_season_closeout.R"),local=TRUE)
+  source(file.path(helper_root,"model","current_season_sources.R"),local=TRUE)
   cutoff <- current_source_through_week
   if (length(cutoff) != 1L || is.na(cutoff) || cutoff < 1L || cutoff > 18L ||
       cutoff != as.integer(cutoff)) stop("Invalid completed-week cutoff.", call. = FALSE)
@@ -389,6 +392,7 @@ prepare_current_sources <- function(env = .GlobalEnv) {
   ensure_season_objects(current_source_season, env = env, auto_source = FALSE)
   outputs <- list()
   audit <- list()
+  skill_audits <- list()
   for (position in names(position_configs)) {
     parts <- list()
     for (variant in c("weekly", "avg")) {
@@ -420,9 +424,18 @@ prepare_current_sources <- function(env = .GlobalEnv) {
       }
       parts[[variant]] <- df
       audit[[length(audit) + 1L]] <- tibble(position = position, variant = variant,
-                                            season = current_source_season, through_week = cutoff, rows = nrow(df),
-                                            min_week = min(df$WK), max_week = max(df$WK),
-                                            excluded_future_rows = future_rows, status = "PASS")
+        season = current_source_season, through_week = cutoff, rows = nrow(df),
+        min_week = min(df$WK), max_week = max(df$WK),
+        excluded_future_rows = future_rows, status = "PASS")
+    }
+    if (position %in% c("QB","RB","WR","TE")) {
+      repaired <- reconcile_current_skill_sources(parts$weekly,parts$avg,position,
+        "C:/Users/danma/OneDrive/Documents/NFLfastR/2026 data")
+      parts$weekly <- repaired$weekly
+      parts$avg <- repaired$avg
+      skill_audits[[position]] <- repaired$audit
+      if (any(repaired$audit$status != "PASS")) stop("Skill-player source reconciliation failed: ",position)
+      for (i in seq_along(audit)) if (audit[[i]]$position == position) audit[[i]]$rows <- nrow(parts$weekly)
     }
     if (position == "DST") {
       dst_box_audit <- audit_current_dst_sources(parts$weekly, parts$avg)
@@ -438,7 +451,8 @@ prepare_current_sources <- function(env = .GlobalEnv) {
     outputs[[paste0(position, "_avg")]] <- parts$avg
     outputs[[paste0(position, "_hybrid")]] <- hybrid
   }
-  list(tables = outputs, audit = bind_rows(audit), dst_box_audit = dst_box_audit)
+  list(tables = outputs, audit = bind_rows(audit), dst_box_audit = dst_box_audit,
+       skill_box_audit = bind_rows(skill_audits))
 }
 
 read_historical_sources <- function(directory = combine_output_dir) {
@@ -480,9 +494,9 @@ write_current_sources <- function(current, history, output_root = dirname(combin
   dir.create(live_dir, recursive = TRUE, showWarnings = FALSE)
   for (name in names(current$tables)) {
     utils::write.csv(current$tables[[name]],
-                     file.path(current_dir, paste0(tolower(name), "_2026.csv")), row.names = FALSE, na = "")
+      file.path(current_dir, paste0(tolower(name), "_2026.csv")), row.names = FALSE, na = "")
     utils::write.csv(live[[name]],
-                     file.path(live_dir, paste0(tolower(name), "_2021_2026.csv")), row.names = FALSE, na = "")
+      file.path(live_dir, paste0(tolower(name), "_2021_2026.csv")), row.names = FALSE, na = "")
   }
   utils::write.csv(current_all, file.path(current_dir, "all_positions_hybrid_2026.csv"),
                    row.names = FALSE, na = "")
@@ -491,9 +505,10 @@ write_current_sources <- function(current, history, output_root = dirname(combin
   utils::write.csv(current$audit, file.path(current_dir, "current_source_audit_2026.csv"),
                    row.names = FALSE)
   utils::write.csv(current$dst_box_audit,file.path(current_dir,"dst_box_score_reconciliation_2026.csv"),row.names=FALSE)
+  utils::write.csv(current$skill_box_audit,file.path(current_dir,"skill_box_score_reconciliation_2026.csv"),row.names=FALSE)
   if (requireNamespace("writexl", quietly = TRUE)) {
     writexl::write_xlsx(c(current$tables, list(source_audit = current$audit)),
-                        file.path(current_dir, "model_sources_2026.xlsx"))
+                      file.path(current_dir, "model_sources_2026.xlsx"))
   }
   message("Current actuals through Week ", current_source_through_week, ": ", current_dir)
   message("Combined live sources (not frozen training data): ", live_dir)
@@ -501,89 +516,89 @@ write_current_sources <- function(current, history, output_root = dirname(combin
 }
 
 if (isTRUE(getOption("model_combine_run", TRUE))) {
-  # Validate the current-season inputs before touching any existing exports.
-  current_position_sources <- prepare_current_sources()
+# Validate the current-season inputs before touching any existing exports.
+current_position_sources <- prepare_current_sources()
+
+if (isTRUE(reuse_historical_sources)) {
+  position_outputs <- read_historical_sources()
+  message("Reusing historical sources without overwriting them: ", combine_output_dir)
+} else {
+dir.create(combine_output_dir, recursive = TRUE, showWarnings = FALSE)
+for (season_year in model_source_seasons) {
+  ensure_season_objects(
+    season_year,
+    env = .GlobalEnv,
+    auto_source = auto_source_season_scripts
+  )
+}
+
+position_outputs <- list()
+manifest_rows <- list()
+
+for (position_name in names(position_configs)) {
+  weekly_df <- collect_position_variant(position_name, "weekly")
+  avg_df <- collect_position_variant(position_name, "avg")
+  hybrid_df <- build_hybrid_position_df(position_name, weekly_df, avg_df)
+  join_keys <- attr(hybrid_df, "join_keys")
   
-  if (isTRUE(reuse_historical_sources)) {
-    position_outputs <- read_historical_sources()
-    message("Reusing historical sources without overwriting them: ", combine_output_dir)
-  } else {
-    dir.create(combine_output_dir, recursive = TRUE, showWarnings = FALSE)
-    for (season_year in model_source_seasons) {
-      ensure_season_objects(
-        season_year,
-        env = .GlobalEnv,
-        auto_source = auto_source_season_scripts
-      )
-    }
-    
-    position_outputs <- list()
-    manifest_rows <- list()
-    
-    for (position_name in names(position_configs)) {
-      weekly_df <- collect_position_variant(position_name, "weekly")
-      avg_df <- collect_position_variant(position_name, "avg")
-      hybrid_df <- build_hybrid_position_df(position_name, weekly_df, avg_df)
-      join_keys <- attr(hybrid_df, "join_keys")
-      
-      weekly_file <- paste0(tolower(position_name), "_weekly_2021_2025.csv")
-      avg_file <- paste0(tolower(position_name), "_avg_2021_2025.csv")
-      hybrid_file <- paste0(tolower(position_name), "_hybrid_2021_2025.csv")
-      
-      write_position_csv(weekly_df, weekly_file)
-      write_position_csv(avg_df, avg_file)
-      write_position_csv(hybrid_df, hybrid_file)
-      
-      position_outputs[[paste0(position_name, "_weekly")]] <- weekly_df
-      position_outputs[[paste0(position_name, "_avg")]] <- avg_df
-      position_outputs[[paste0(position_name, "_hybrid")]] <- hybrid_df
-      
-      manifest_rows[[length(manifest_rows) + 1]] <- tibble(
-        position = position_name,
-        variant = "weekly",
-        file_name = weekly_file,
-        rows = nrow(weekly_df),
-        cols = ncol(weekly_df),
-        join_keys = paste(join_keys, collapse = ", ")
-      )
-      manifest_rows[[length(manifest_rows) + 1]] <- tibble(
-        position = position_name,
-        variant = "avg",
-        file_name = avg_file,
-        rows = nrow(avg_df),
-        cols = ncol(avg_df),
-        join_keys = paste(join_keys, collapse = ", ")
-      )
-      manifest_rows[[length(manifest_rows) + 1]] <- tibble(
-        position = position_name,
-        variant = "hybrid",
-        file_name = hybrid_file,
-        rows = nrow(hybrid_df),
-        cols = ncol(hybrid_df),
-        join_keys = paste(join_keys, collapse = ", ")
-      )
-    }
-    
-    manifest_df <- bind_rows(manifest_rows)
-    utils::write.csv(
-      manifest_df,
-      file.path(combine_output_dir, "model_source_manifest_2021_2025.csv"),
-      row.names = FALSE
-    )
-    
-    if (requireNamespace("writexl", quietly = TRUE)) {
-      workbook_sheets <- c(
-        position_outputs,
-        list(model_source_manifest = manifest_df)
-      )
-      writexl::write_xlsx(
-        workbook_sheets,
-        path = file.path(combine_output_dir, "model_sources_2021_2025.xlsx")
-      )
-    }
-    
-    message("Model source files written to: ", combine_output_dir)
-    message("Manifest: ", file.path(combine_output_dir, "model_source_manifest_2021_2025.csv"))
-  }
-  write_current_sources(current_position_sources, position_outputs)
+  weekly_file <- paste0(tolower(position_name), "_weekly_2021_2025.csv")
+  avg_file <- paste0(tolower(position_name), "_avg_2021_2025.csv")
+  hybrid_file <- paste0(tolower(position_name), "_hybrid_2021_2025.csv")
+  
+  write_position_csv(weekly_df, weekly_file)
+  write_position_csv(avg_df, avg_file)
+  write_position_csv(hybrid_df, hybrid_file)
+  
+  position_outputs[[paste0(position_name, "_weekly")]] <- weekly_df
+  position_outputs[[paste0(position_name, "_avg")]] <- avg_df
+  position_outputs[[paste0(position_name, "_hybrid")]] <- hybrid_df
+  
+  manifest_rows[[length(manifest_rows) + 1]] <- tibble(
+    position = position_name,
+    variant = "weekly",
+    file_name = weekly_file,
+    rows = nrow(weekly_df),
+    cols = ncol(weekly_df),
+    join_keys = paste(join_keys, collapse = ", ")
+  )
+  manifest_rows[[length(manifest_rows) + 1]] <- tibble(
+    position = position_name,
+    variant = "avg",
+    file_name = avg_file,
+    rows = nrow(avg_df),
+    cols = ncol(avg_df),
+    join_keys = paste(join_keys, collapse = ", ")
+  )
+  manifest_rows[[length(manifest_rows) + 1]] <- tibble(
+    position = position_name,
+    variant = "hybrid",
+    file_name = hybrid_file,
+    rows = nrow(hybrid_df),
+    cols = ncol(hybrid_df),
+    join_keys = paste(join_keys, collapse = ", ")
+  )
+}
+
+manifest_df <- bind_rows(manifest_rows)
+utils::write.csv(
+  manifest_df,
+  file.path(combine_output_dir, "model_source_manifest_2021_2025.csv"),
+  row.names = FALSE
+)
+
+if (requireNamespace("writexl", quietly = TRUE)) {
+  workbook_sheets <- c(
+    position_outputs,
+    list(model_source_manifest = manifest_df)
+  )
+  writexl::write_xlsx(
+    workbook_sheets,
+    path = file.path(combine_output_dir, "model_sources_2021_2025.xlsx")
+  )
+}
+
+message("Model source files written to: ", combine_output_dir)
+message("Manifest: ", file.path(combine_output_dir, "model_source_manifest_2021_2025.csv"))
+}
+write_current_sources(current_position_sources, position_outputs)
 }
