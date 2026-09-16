@@ -1,5 +1,5 @@
 # Standalone season-over-season model script.
-# This file is self-contained and does not source other local model scripts.
+# Forecast logic is self-contained; the opt-in current-season closeout loads its shared helper.
 
 model_project_root <- "C:/Users/danma/OneDrive/Documents/New project"
 options(model_project_root = model_project_root)
@@ -1077,6 +1077,7 @@ build_qb_player_season_combined_table <- function(
       rush_attempts = sum(.data$rush_attempts, na.rm = TRUE),
       rush_yards = sum(.data$rush_yards, na.rm = TRUE),
       rush_td = sum(.data$rush_td, na.rm = TRUE),
+      fumbles = sum(.data$fumbles, na.rm = TRUE),
       fantasy_points = sum(.data$fantasy_points_calc, na.rm = TRUE),
       fantasy_points_per_game = mean(.data$fantasy_points_calc, na.rm = TRUE),
       fantasy_points_sd = stats::sd(.data$fantasy_points_calc, na.rm = TRUE),
@@ -1251,6 +1252,7 @@ build_qb_sos_target_table <- function(qb_player_season_combined_table = NULL) {
       target_next_rush_attempts = rush_attempts,
       target_next_rush_yards = rush_yards,
       target_next_rush_td = rush_td,
+      target_next_fumbles = fumbles,
       target_next_points_rank_all,
       next_top3_points_all,
       next_top6_points_all,
@@ -3194,6 +3196,7 @@ build_rb_sos_training_frame <- function(
 
   out <- rb_player_season_combined_table |>
     dplyr::mutate(
+      position = "RB",
       target_next_season = .data$next_season,
       qualified_4_games_current = as.integer(.data$games >= 4),
       qualified_8_games_current = as.integer(.data$games >= 8)
@@ -11869,6 +11872,27 @@ sos_nfl_team_name_lookup <- function() {
     dplyr::mutate(team_key = sos_normalize_team_name_key(.data$team_name))
 }
 
+sos_2026_context_roster_additions <- function(prediction_season = 2026L, week = 1L) {
+  prediction_season <- as.integer(prediction_season[[1]])
+  week <- as.integer(week[[1]])
+  if (prediction_season != 2026L || week != 1L) {
+    return(data.frame())
+  }
+  data.frame(
+    prediction_season = prediction_season,
+    week = week,
+    team = "NYJ",
+    team_name = "New York Jets",
+    position = "K",
+    player = "Blake Grupe",
+    depth_team = 1L,
+    depth_ecr = NA_real_,
+    roster_source = "official_transaction_depth_override",
+    stringsAsFactors = FALSE
+  ) |>
+    dplyr::mutate(player_key = make_player_key(.data$player))
+}
+
 sos_parse_depth_csv_line <- function(line, width = 8L) {
   parsed <- tryCatch(
     utils::read.csv(
@@ -11887,6 +11911,307 @@ sos_parse_depth_csv_line <- function(line, width = 8L) {
   values
 }
 
+sos_empty_depth_chart <- function() {
+  data.frame(
+    prediction_season = integer(),
+    week = integer(),
+    team = character(),
+    team_name = character(),
+    position = character(),
+    player = character(),
+    player_key = character(),
+    depth_team = integer(),
+    depth_ecr = numeric(),
+    roster_source = character(),
+    source_timestamp = character(),
+    stringsAsFactors = FALSE
+  )
+}
+
+sos_read_approved_week_depth_chart <- function(path, prediction_season, week) {
+  raw <- tryCatch(
+    utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE),
+    error = function(e) NULL
+  )
+  required <- c("Name", "SEA", "WK", "TM", "POS", "depth_team")
+  if (is.null(raw) || !all(required %in% names(raw))) {
+    stop("Approved nflverse Week 1 depth chart is missing required columns: ", path, call. = FALSE)
+  }
+
+  source_timestamp <- format(
+    file.info(path)$mtime,
+    "%Y-%m-%dT%H:%M:%S%z",
+    tz = "America/New_York"
+  )
+  team_lookup <- sos_nfl_team_name_lookup()
+  # A refreshed file is not fresh evidence for every inherited row.
+  if (!"roster_source" %in% names(raw)) raw$roster_source <- "nflverse_expected_depth_week1_approved"
+  if (!"source_timestamp" %in% names(raw)) raw$source_timestamp <- source_timestamp
+  if (!"source_url" %in% names(raw)) raw$source_url <- ""
+  if (!"depth_order_status" %in% names(raw)) raw$depth_order_status <- "baseline_expected"
+  if (!"roster_status" %in% names(raw)) raw$roster_status <- "not_verified_active"
+  selected <- raw[which(suppressWarnings(as.integer(raw$SEA)) == as.integer(prediction_season) &
+                       suppressWarnings(as.integer(raw$WK)) == as.integer(week)), , drop = FALSE]
+  selected_depth <- suppressWarnings(as.numeric(selected$depth_team))
+  if (any(!is.finite(selected_depth)) || any(selected_depth < 1 | selected_depth != floor(selected_depth)) ||
+      anyNA(selected$Name) || any(!nzchar(trimws(selected$Name)))) {
+    stop("Week depth chart contains invalid names or non-integer depth ranks.", call. = FALSE)
+  }
+  out <- raw |>
+    dplyr::filter(
+      suppressWarnings(as.integer(.data$SEA)) == as.integer(prediction_season),
+      suppressWarnings(as.integer(.data$WK)) == as.integer(week)
+    ) |>
+    dplyr::transmute(
+      prediction_season = as.integer(prediction_season),
+      week = as.integer(week),
+      team = normalize_team_abbr(as.character(.data$TM)),
+      position = dplyr::recode(toupper(as.character(.data$POS)), "PK" = "K"),
+      player = trimws(as.character(.data$Name)),
+      depth_team = suppressWarnings(as.integer(.data$depth_team)),
+      depth_ecr = NA_real_,
+      roster_source = as.character(.data$roster_source),
+      source_timestamp = as.character(.data$source_timestamp),
+      source_url = as.character(.data$source_url),
+      depth_order_status = as.character(.data$depth_order_status),
+      roster_status = as.character(.data$roster_status)
+    ) |>
+    dplyr::filter(
+      .data$position %in% c("QB", "RB", "WR", "TE", "K"),
+      !is.na(.data$player),
+      nzchar(.data$player),
+      is.finite(.data$depth_team),
+      .data$depth_team >= 1L
+    ) |>
+    dplyr::mutate(
+      player_key = make_player_key(.data$player),
+      team_name = team_lookup$team_name[match(.data$team, team_lookup$team)]
+    ) |>
+    dplyr::select(
+      "prediction_season", "week", "team", "team_name", "position", "player",
+      "player_key", "depth_team", "depth_ecr", "roster_source", "source_timestamp",
+      "source_url", "depth_order_status", "roster_status"
+    ) |>
+    dplyr::arrange(
+      factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")),
+      .data$team,
+      .data$depth_team,
+      .data$player
+    )
+
+  expected_teams <- sort(team_lookup$team)
+  if (anyDuplicated(paste(out$position, out$player_key)) ||
+      any(!out$team %in% expected_teams) || anyNA(out$source_timestamp) ||
+      any(!nzchar(out$source_timestamp)) || anyNA(out$roster_source) ||
+      any(!out$roster_source %in% c("nflverse_expected_depth_week1_approved", "official_transaction_depth_override"))) {
+    stop("Week depth chart has duplicate identities, invalid teams or missing provenance.", call. = FALSE)
+  }
+  qb1 <- out[out$position == "QB" & out$depth_team == 1L, , drop = FALSE]
+  k1 <- out[out$position == "K" & out$depth_team == 1L, , drop = FALSE]
+  if (
+    nrow(qb1) != 32L || nrow(k1) != 32L ||
+      !identical(sort(unique(qb1$team)), expected_teams) ||
+      !identical(sort(unique(k1$team)), expected_teams)
+  ) {
+    stop("Approved nflverse Week 1 depth chart failed the 32-team QB1/K1 audit.", call. = FALSE)
+  }
+  out
+}
+
+sos_read_latest_nflverse_snapshot <- function(path) {
+  file_size <- file.info(path)$size
+  if (!is.finite(file_size) || file_size <= 0) return(NULL)
+
+  source_timestamp <- local({
+    input <- file(path, open = "r", encoding = "UTF-8")
+    on.exit(close(input))
+    readLines(input, n = 1L, warn = FALSE)
+    latest <- NA_character_
+    repeat {
+      chunk <- readLines(input, n = 10000L, warn = FALSE)
+      if (length(chunk) == 0L) break
+      candidates <- sub(",.*$", "", chunk)
+      candidates <- candidates[grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}T", candidates)]
+      if (length(candidates) > 0L) {
+        chunk_latest <- max(candidates, na.rm = TRUE)
+        latest <- if (is.na(latest)) chunk_latest else max(latest, chunk_latest)
+      }
+    }
+    latest
+  })
+  if (
+    length(source_timestamp) != 1L || is.na(source_timestamp) ||
+      !nzchar(source_timestamp) || source_timestamp == "dt"
+  ) return(NULL)
+
+  snapshot <- local({
+    input <- file(path, open = "r", encoding = "UTF-8")
+    on.exit(close(input))
+    header <- readLines(input, n = 1L, warn = FALSE)
+    prefix <- paste0(source_timestamp, ",")
+    snapshot_lines <- character()
+    repeat {
+      chunk <- readLines(input, n = 10000L, warn = FALSE)
+      if (length(chunk) == 0L) break
+      keep <- startsWith(chunk, prefix)
+      if (any(keep)) snapshot_lines <- c(snapshot_lines, chunk[keep])
+    }
+    list(header = header, lines = snapshot_lines)
+  })
+  header <- snapshot$header
+  snapshot_lines <- snapshot$lines
+  if (length(header) != 1L) return(NULL)
+  if (length(snapshot_lines) == 0L) return(NULL)
+
+  raw <- tryCatch(
+    utils::read.csv(
+      text = paste(c(header, snapshot_lines), collapse = "\n"),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    ),
+    error = function(e) NULL
+  )
+  if (is.null(raw)) return(NULL)
+  attr(raw, "source_timestamp") <- source_timestamp
+  raw
+}
+
+sos_read_nflverse_depth_chart <- function(
+    prediction_season,
+    week,
+    depth_dir,
+    output_dir,
+    refresh_after_hours = 6
+) {
+  prediction_season <- as.integer(prediction_season[[1]])
+  week <- as.integer(week[[1]])
+  approved_path <- file.path(
+    depth_dir,
+    sprintf("nflverse_depth_chart_%s_wk%s.csv", substr(as.character(prediction_season), 3, 4), week)
+  )
+  # Content-sensitive keys also separate fixtures/alternate input directories.
+  approved_fingerprint <- if (file.exists(approved_path)) unname(tools::md5sum(approved_path)) else "no_approved_file"
+  cache_key <- paste0("nflverse_depth_chart_", prediction_season, "_week_", week, "_",
+                      normalizePath(depth_dir, winslash = "/", mustWork = FALSE), "_", approved_fingerprint)
+  if (exists(cache_key, envir = model_cache, inherits = FALSE)) {
+    return(get(cache_key, envir = model_cache, inherits = FALSE))
+  }
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  if (file.exists(approved_path)) {
+    out <- sos_read_approved_week_depth_chart(
+      approved_path,
+      prediction_season = prediction_season,
+      week = week
+    )
+    assign(cache_key, out, envir = model_cache)
+    return(out)
+  }
+
+  cache_path <- file.path(output_dir, paste0("nflverse_depth_charts_", prediction_season, ".csv"))
+  local_candidates <- c(
+    file.path(depth_dir, paste0("nflverse_depth_charts_", prediction_season, ".csv")),
+    file.path(depth_dir, paste0("depth_charts_", prediction_season, ".csv")),
+    cache_path
+  )
+  local_candidates <- unique(local_candidates[file.exists(local_candidates)])
+  source_path <- if (length(local_candidates) > 0L) {
+    local_candidates[[which.max(file.info(local_candidates)$mtime)]]
+  } else {
+    NA_character_
+  }
+  source_age_hours <- if (!is.na(source_path)) {
+    as.numeric(difftime(Sys.time(), file.info(source_path)$mtime, units = "hours"))
+  } else {
+    Inf
+  }
+
+  if (!is.finite(source_age_hours) || source_age_hours > refresh_after_hours) {
+    source_url <- sprintf(
+      "https://github.com/nflverse/nflverse-data/releases/download/depth_charts/depth_charts_%s.csv",
+      prediction_season
+    )
+    downloaded <- tempfile(fileext = ".csv")
+    old_timeout <- getOption("timeout")
+    on.exit(options(timeout = old_timeout), add = TRUE)
+    options(timeout = max(300, old_timeout))
+    download_ok <- tryCatch({
+      suppressWarnings(utils::download.file(source_url, downloaded, mode = "wb", quiet = TRUE))
+      file.exists(downloaded) && file.info(downloaded)$size > 1000
+    }, error = function(e) FALSE, warning = function(w) FALSE)
+    if (isTRUE(download_ok)) {
+      copied <- isTRUE(file.copy(downloaded, cache_path, overwrite = TRUE))
+      source_path <- if (copied) cache_path else downloaded
+    }
+  }
+
+  if (is.na(source_path) || !file.exists(source_path)) {
+    return(sos_empty_depth_chart())
+  }
+
+  raw <- sos_read_latest_nflverse_snapshot(source_path)
+  required <- c("dt", "team", "player_name", "pos_abb", "pos_rank")
+  if (is.null(raw) || !all(required %in% names(raw))) {
+    return(sos_empty_depth_chart())
+  }
+
+  source_timestamp <- attr(raw, "source_timestamp")
+  if (!is.character(source_timestamp) || length(source_timestamp) != 1L || !nzchar(source_timestamp)) {
+    return(sos_empty_depth_chart())
+  }
+  team_lookup <- sos_nfl_team_name_lookup()
+  out <- raw |>
+    dplyr::filter(as.character(.data$dt) == .env$source_timestamp) |>
+    dplyr::transmute(
+      prediction_season = .env$prediction_season,
+      week = .env$week,
+      team = normalize_team_abbr(as.character(.data$team)),
+      position = dplyr::recode(toupper(as.character(.data$pos_abb)), "PK" = "K"),
+      player = trimws(as.character(.data$player_name)),
+      depth_team = suppressWarnings(as.integer(.data$pos_rank)),
+      depth_ecr = NA_real_,
+      roster_source = "nflverse_espn_depth_chart",
+      source_timestamp = .env$source_timestamp
+    ) |>
+    dplyr::filter(
+      .data$position %in% c("QB", "RB", "WR", "TE", "K"),
+      !is.na(.data$player),
+      .data$player != "",
+      is.finite(.data$depth_team),
+      .data$depth_team >= 1L
+    ) |>
+    dplyr::mutate(
+      player_key = make_player_key(.data$player),
+      team_name = team_lookup$team_name[match(.data$team, team_lookup$team)]
+    ) |>
+    dplyr::group_by(.data$prediction_season, .data$week, .data$team, .data$position, .data$player_key) |>
+    dplyr::slice_min(order_by = .data$depth_team, with_ties = FALSE) |>
+    dplyr::ungroup() |>
+    dplyr::select(
+      "prediction_season", "week", "team", "team_name", "position", "player",
+      "player_key", "depth_team", "depth_ecr", "roster_source", "source_timestamp"
+    ) |>
+    dplyr::arrange(
+      factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")),
+      .data$team,
+      .data$depth_team,
+      .data$player
+    )
+
+  expected_teams <- sort(sos_nfl_team_name_lookup()$team)
+  qb1 <- out[out$position == "QB" & out$depth_team == 1L, , drop = FALSE]
+  k1 <- out[out$position == "K" & out$depth_team == 1L, , drop = FALSE]
+  if (
+    nrow(qb1) != 32L || nrow(k1) != 32L ||
+      !identical(sort(unique(qb1$team)), expected_teams) ||
+      !identical(sort(unique(k1$team)), expected_teams)
+  ) {
+    return(sos_empty_depth_chart())
+  }
+
+  assign(cache_key, out, envir = model_cache)
+  out
+}
+
 sos_read_2026_depth_chart_week <- function(
     prediction_season = 2026L,
     week = 1L,
@@ -11897,24 +12222,59 @@ sos_read_2026_depth_chart_week <- function(
   load_model_core_packages()
   prediction_season <- as.integer(prediction_season[[1]])
   week <- as.integer(week[[1]])
+  nflverse_out <- sos_read_nflverse_depth_chart(
+    prediction_season = prediction_season,
+    week = week,
+    depth_dir = depth_dir,
+    output_dir = output_dir
+  )
+  if (nrow(nflverse_out) > 0L) {
+    context_additions <- sos_2026_context_roster_additions(prediction_season, week)
+    # An already-present player retains the file's row-level provenance.
+    context_additions <- dplyr::anti_join(
+      context_additions, dplyr::select(nflverse_out, .data$position, .data$player_key),
+      by = c("position", "player_key")
+    )
+    if (nrow(context_additions) > 0L) {
+      context_additions$source_timestamp <- max(nflverse_out$source_timestamp, na.rm = TRUE)
+      occupied_slots <- context_additions |>
+        dplyr::select(.data$team, .data$position, .data$depth_team) |>
+        dplyr::distinct()
+      nflverse_out <- nflverse_out |>
+        dplyr::anti_join(
+          dplyr::select(context_additions, .data$position, .data$player_key),
+          by = c("position", "player_key")
+        ) |>
+        dplyr::anti_join(
+          occupied_slots,
+          by = c("team", "position", "depth_team")
+        ) |>
+        dplyr::bind_rows(context_additions) |>
+        dplyr::arrange(
+          factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")),
+          .data$team,
+          .data$depth_team,
+          .data$player
+        )
+    }
+    if (isTRUE(write_output)) {
+      dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+      utils::write.csv(
+        nflverse_out,
+        file.path(output_dir, paste0("sos_", prediction_season, "_depth_chart_week", week, ".csv")),
+        row.names = FALSE,
+        na = ""
+      )
+    }
+    return(nflverse_out)
+  }
+
   depth_path <- file.path(
     depth_dir,
     sprintf("Depth Chart %s wk %s.csv", substr(as.character(prediction_season), 3L, 4L), week)
   )
   if (!file.exists(depth_path)) {
-    return(data.frame(
-      prediction_season = integer(),
-      week = integer(),
-      team = character(),
-      team_name = character(),
-      position = character(),
-      player = character(),
-      player_key = character(),
-      depth_team = integer(),
-      depth_ecr = numeric(),
-      roster_source = character(),
-      stringsAsFactors = FALSE
-    ))
+    return(sos_empty_depth_chart())
   }
 
   lines <- readLines(depth_path, warn = FALSE, encoding = "UTF-8")
@@ -11984,25 +12344,29 @@ sos_read_2026_depth_chart_week <- function(
   }
 
   out <- if (length(rows) == 0L) {
-    data.frame(
-      prediction_season = integer(),
-      week = integer(),
-      team = character(),
-      team_name = character(),
-      position = character(),
-      player = character(),
-      player_key = character(),
-      depth_team = integer(),
-      depth_ecr = numeric(),
-      roster_source = character(),
-      stringsAsFactors = FALSE
-    )
+    sos_empty_depth_chart()
   } else {
     dplyr::bind_rows(rows) |>
       dplyr::group_by(.data$prediction_season, .data$week, .data$position, .data$player_key) |>
       dplyr::slice_min(order_by = .data$depth_team, with_ties = FALSE) |>
       dplyr::ungroup() |>
       dplyr::arrange(factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")), .data$team, .data$depth_team)
+  }
+
+  context_additions <- sos_2026_context_roster_additions(prediction_season, week)
+  if (nrow(context_additions) > 0L) {
+    out <- out |>
+      dplyr::anti_join(
+        dplyr::select(context_additions, .data$position, .data$player_key),
+        by = c("position", "player_key")
+      ) |>
+      dplyr::bind_rows(context_additions) |>
+      dplyr::arrange(
+        factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")),
+        .data$team,
+        .data$depth_team,
+        .data$player
+      )
   }
 
   if (isTRUE(write_output)) {
@@ -14433,7 +14797,7 @@ sos_stat_specs <- function(position) {
     toupper(position),
     QB = c(
       "pass_attempts", "pass_yards", "pass_td", "interceptions",
-      "rush_attempts", "rush_yards", "rush_td"
+      "rush_attempts", "rush_yards", "rush_td", "fumbles"
     ),
     RB = c(
       "rush_attempts", "rush_yards", "rush_td", "targets", "receptions",
@@ -15126,6 +15490,63 @@ sos_apply_qb_final_review_projection_context <- function(
     ),
     stringsAsFactors = FALSE
   )
+  context <- context |>
+    dplyr::mutate(
+      ppg_pct = dplyr::if_else(
+        .data$player_key == make_player_key("Patrick Mahomes"),
+        -0.04,
+        .data$ppg_pct
+      ),
+      note = dplyr::if_else(
+        .data$player_key == make_player_key("Patrick Mahomes"),
+        paste(
+          "Apply additional post-ACL downside to the central projection and rank;",
+          "reduce rushing expectations while preserving the passing profile."
+        ),
+        .data$note
+      )
+    )
+  latest_context <- data.frame(
+    player_key = make_player_key(c(
+      "Matthew Stafford", "Brock Purdy", "Joe Burrow",
+      "Trevor Lawrence", "Caleb Williams", "Michael Penix", "Tua Tagovailoa"
+    )),
+    games_floor = c(NA, 15, 15, NA, NA, 15, NA),
+    games_cap = c(NA, NA, NA, NA, NA, NA, 3),
+    ppg_pct = c(-0.06, 0.02, 0.05, -0.04, -0.04, 0.05, -0.06),
+    note = c(
+      "Apply stronger passing-touchdown regression after the prior 40-touchdown season.",
+      "Retain the 15-game starter floor and increase passing-touchdown expectation.",
+      "Increase the healthy passing baseline and preserve the 15-game projection floor.",
+      "Apply a modest central reduction so the ranking follows the lower base outcome.",
+      "Apply a modest central reduction so the ranking follows the lower base outcome.",
+      "Treat Penix as Atlanta's projected starter with a 15-game season floor.",
+      "Move Tua behind Penix in Atlanta and cap the projection as a contingency quarterback."
+    ),
+    stringsAsFactors = FALSE
+  )
+  context <- dplyr::bind_rows(
+    dplyr::filter(context, !.data$player_key %in% latest_context$player_key),
+    latest_context
+  )
+  latest_context_2 <- data.frame(
+    player_key = make_player_key(c(
+      "Matthew Stafford", "Justin Herbert", "Jayden Daniels"
+    )),
+    games_floor = c(NA, NA, 15),
+    games_cap = c(NA, NA, NA),
+    ppg_pct = c(-0.06, -0.04, 0.04),
+    note = c(
+      "Apply additional passing-volume and touchdown regression after Stafford's 40-touchdown season.",
+      "Reduce Herbert modestly so his rank remains coherent with the lower base projection around him.",
+      "Increase Daniels modestly so the rank follows his stronger healthy-season base projection."
+    ),
+    stringsAsFactors = FALSE
+  )
+  context <- dplyr::bind_rows(
+    dplyr::filter(context, !.data$player_key %in% latest_context_2$player_key),
+    latest_context_2
+  )
   out <- board
   if (!"context_adjustment_count" %in% names(out)) out$context_adjustment_count <- 0L
   if (!"manual_context_note" %in% names(out)) out$manual_context_note <- ""
@@ -15293,6 +15714,93 @@ sos_apply_rb_final_review_projection_context <- function(
     ),
     stringsAsFactors = FALSE
   )
+  context_updates <- data.frame(
+    player_key = make_player_key(c(
+      "De'Von Achane", "D'Andre Swift", "Bhayshul Tuten", "Chris Rodriguez",
+      "Travis Etienne", "Alvin Kamara", "James Conner", "Nicholas Singleton",
+      "Kaytron Allen", "Kaelon Black", "Jordan James", "Keaton Mitchell"
+    )),
+    games_floor = c(NA, NA, 15, NA, NA, NA, NA, NA, NA, NA, NA, NA),
+    games_cap = c(NA, NA, NA, NA, NA, 9, 8, 10, 10, NA, NA, NA),
+    ppg_pct = c(-0.10, 0.05, 0.14, 0.12, 0.01, -0.08, -0.18, -0.15, -0.15, 0.18, -0.15, 0.20),
+    ppg_floor = c(NA, NA, 11.0, NA, NA, NA, NA, NA, NA, NA, NA, NA),
+    p10_pct = c(-0.08, 0, 0, 0, 0, -0.08, -0.12, -0.08, -0.08, 0, -0.08, 0),
+    p90_pct = c(-0.05, 0.03, 0.04, 0.05, 0.02, -0.08, -0.12, -0.08, -0.08, 0.08, -0.08, 0.08),
+    note = c(
+      "Restore a small amount of Achane volume while retaining the weaker-offense and receiving-risk discount.",
+      "Apply a modest temporary volume increase while Kyle Monangai is limited to begin the season.",
+      "Trim Tuten slightly from the prior aggressive lead-back projection to account for Chris Rodriguez's share.",
+      "Increase Rodriguez modestly for a meaningful complementary and goal-line role behind Tuten.",
+      "Apply a small Etienne volume increase while Alvin Kamara's availability is limited.",
+      "Reduce Kamara's availability and workload for the injury while shifting a small share to Etienne.",
+      "Treat Conner as Arizona's third back when Jeremiyah Love is healthy and reduce both availability and workload.",
+      "Treat Singleton as a third-string back to begin the season and reduce the central workload.",
+      "Treat Allen as a third-string back to begin the season and reduce the central workload.",
+      "Treat Black as Christian McCaffrey's primary handcuff and increase contingent opportunity.",
+      "Move James behind Kaelon Black in San Francisco's handcuff order.",
+      "Increase Mitchell for an expected complementary role alongside Omarion Hampton."
+    ),
+    stringsAsFactors = FALSE
+  )
+  context <- dplyr::bind_rows(
+    dplyr::filter(context, !.data$player_key %in% context_updates$player_key),
+    context_updates
+  )
+  latest_context <- data.frame(
+    player_key = make_player_key(c(
+      "Jahmyr Gibbs", "Ashton Jeanty", "Kyren Williams", "Blake Corum",
+      "Kenneth Walker", "Rhamondre Stevenson", "TreVeyon Henderson",
+      "Kimani Vidal", "Alvin Kamara", "Malik Davis", "Jaydon Blue",
+      "George Holani", "LeQuint Allen", "Kendre Miller", "Devin Neal"
+    )),
+    games_floor = c(NA, NA, NA, NA, 15, NA, NA, NA, NA, NA, NA, 8, NA, 8, NA),
+    games_cap = c(NA, NA, NA, NA, NA, NA, NA, 8, 7, NA, NA, NA, NA, NA, 7),
+    ppg_pct = c(0.03, -0.05, -0.10, 0.38, 0.10, 0.05, -0.06, -0.15, -0.15, 0.20, -0.12, 0.10, 0.08, 0.30, -0.18),
+    ppg_floor = rep(NA_real_, 15),
+    p10_pct = c(0, -0.10, -0.05, 0, 0, 0, -0.04, -0.08, -0.12, 0, -0.08, 0, 0, 0, -0.08),
+    p90_pct = c(0.03, -0.05, -0.05, 0.10, 0.05, 0.03, -0.03, -0.08, -0.10, 0.08, -0.06, 0.08, 0.05, 0.10, -0.08),
+    note = c(
+      "Increase Gibbs enough to reflect the strongest overall RB projection and RB1 outcome.",
+      "Apply a modest availability and efficiency discount while the ankle may limit him to begin the season.",
+      "Apply additional workload regression for Blake Corum's larger drive share.",
+      "Treat Corum as the highest-value handcuff with a materially larger rushing role.",
+      "Increase Walker's central and ceiling projection to match the Kansas City bellcow role.",
+      "Move Stevenson ahead in New England's trusted early-down and pass-protection split.",
+      "Reduce Henderson modestly for the continued committee and pass-protection limitation.",
+      "Treat Vidal as the Chargers' third-string back and reduce availability and workload.",
+      "Lower Kamara further for a multi-week early-season absence.",
+      "Treat Davis as Dallas's primary handcuff and increase contingent workload.",
+      "Move Blue behind Malik Davis and reduce the central workload.",
+      "Increase Holani for the early-season receiving role until Zach Charbonnet returns.",
+      "Increase Allen for an obvious-passing-down role without projecting lead-back volume.",
+      "Treat Miller as New Orleans' opening handcuff and increase the contingent workload.",
+      "Move Neal behind Miller and reduce his season workload after the hamstring setback."
+    ),
+    stringsAsFactors = FALSE
+  )
+  context <- dplyr::bind_rows(
+    dplyr::filter(context, !.data$player_key %in% latest_context$player_key),
+    latest_context
+  )
+  latest_context_2 <- data.frame(
+    player_key = make_player_key(c("Ray Davis", "Ty Johnson", "Brian Robinson")),
+    games_floor = c(12, NA, 13),
+    games_cap = c(NA, 12, NA),
+    ppg_pct = c(0.18, -0.15, 0.15),
+    ppg_floor = rep(NA_real_, 3),
+    p10_pct = c(0, -0.08, 0),
+    p90_pct = c(0.10, -0.08, 0.10),
+    note = c(
+      "Treat Davis, not Ty Johnson, as James Cook's primary handcuff and increase contingent volume.",
+      "Move Johnson behind Ray Davis in Buffalo's backup order and reduce contingent workload.",
+      "Increase Robinson as Bijan Robinson's primary handcuff with meaningful contingent rushing volume."
+    ),
+    stringsAsFactors = FALSE
+  )
+  context <- dplyr::bind_rows(
+    dplyr::filter(context, !.data$player_key %in% latest_context_2$player_key),
+    latest_context_2
+  )
   out <- board
   if (!"context_adjustment_count" %in% names(out)) out$context_adjustment_count <- 0L
   if (!"manual_context_note" %in% names(out)) out$manual_context_note <- ""
@@ -15440,7 +15948,7 @@ sos_apply_wr_final_review_projection_context <- function(
     ),
     games_cap = c(
       NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, 13, NA, NA, NA, NA, NA,
-      NA, 10, NA, NA, NA, NA, NA, NA, NA, NA, NA, 11
+      NA, 10, NA, NA, NA, NA, NA, NA, NA, NA, NA, 9
     ),
     ppg_pct = c(
       -0.05, 0.06, 0.05, 0.10, 0.12, -0.08, 0.04, -0.08, 0.08, 0.12,
@@ -15448,8 +15956,7 @@ sos_apply_wr_final_review_projection_context <- function(
       0.15, 0.25, 0, 0.03, 0.05, 0.08, 0.04, 0
     ),
     ppg_floor = c(
-      NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,
-      NA, NA, 8, NA, NA, 8, NA, NA, NA, NA, NA, NA
+      rep(NA_real_, 18), 8, NA, NA, 8, rep(NA_real_, 5), 9.05
     ),
     p10_pct = c(
       -0.03, 0, 0, 0, 0, -0.03, 0, -0.03, 0, 0, -0.05, 0, 0, -0.03,
@@ -15488,9 +15995,74 @@ sos_apply_wr_final_review_projection_context <- function(
       "Set a 13-game floor and add a modest profile-based production increase.",
       "Increase Moore as Buffalo's likely No. 1 receiver without assigning a dominant target share.",
       "Apply a modest central and ceiling increase for a reported full-time path and manufactured-touch role while retaining rookie uncertainty.",
-      "Cap availability at 11 games and widen the downside after the confirmed roughly two-month hamstring absence; preserve OMFG as the healthy-talent evaluation."
+      "Cap availability at nine games, set a healthy-game scoring floor, and widen the downside after the confirmed roughly two-month hamstring absence; preserve OMFG as the healthy-talent evaluation."
     ),
     stringsAsFactors = FALSE
+  )
+  context_updates <- data.frame(
+    player_key = make_player_key(c("A.J. Brown", "Michael Pittman", "DJ Moore")),
+    team_override = c(NA, NA, NA),
+    games_floor = c(15, NA, NA),
+    games_cap = c(NA, NA, NA),
+    ppg_pct = c(0.02, -0.04, 0.07),
+    ppg_floor = c(NA, NA, NA),
+    p10_pct = c(0, -0.02, 0),
+    p90_pct = c(0.03, -0.02, 0.04),
+    note = c(
+      "Raise Brown to a 15-game projection and scale his lead-receiver production accordingly.",
+      "Apply a slight Pittman reduction for Pittsburgh's lower-scoring offensive environment.",
+      "Increase Moore as Josh Allen's clear No. 1 target while retaining a distributed Buffalo passing tree."
+    ),
+    stringsAsFactors = FALSE
+  )
+  context <- dplyr::bind_rows(
+    dplyr::filter(context, !.data$player_key %in% context_updates$player_key),
+    context_updates
+  )
+  latest_context <- data.frame(
+    player_key = make_player_key(c(
+      "A.J. Brown", "Justin Jefferson", "CeeDee Lamb",
+      "George Pickens", "Jauan Jennings", "KC Concepcion"
+    )),
+    team_override = rep(NA_character_, 6),
+    games_floor = c(15, 15, 15, NA, NA, NA),
+    games_cap = c(NA, NA, NA, NA, 13, NA),
+    ppg_pct = c(0.05, 0.06, -0.03, -0.04, -0.15, 0.04),
+    ppg_floor = rep(NA_real_, 6),
+    p10_pct = c(0, 0, -0.02, -0.02, -0.08, 0),
+    p90_pct = c(0.04, 0.05, -0.02, -0.03, -0.08, 0.03),
+    note = c(
+      "Increase Brown above the Dallas receivers because he has less target competition.",
+      "Increase Jefferson above the Dallas receivers because he has less target competition.",
+      "Reduce Lamb modestly for the shared Dallas target tree with George Pickens.",
+      "Reduce Pickens modestly for the shared Dallas target tree with CeeDee Lamb.",
+      "Treat Jennings as Minnesota's No. 3 receiver and reduce the central workload.",
+      "Treat Concepcion as Cleveland's projected No. 1 receiver, but limit the premium for rookie and quarterback uncertainty."
+    ),
+    stringsAsFactors = FALSE
+  )
+  context <- dplyr::bind_rows(
+    dplyr::filter(context, !.data$player_key %in% latest_context$player_key),
+    latest_context
+  )
+  latest_context_2 <- data.frame(
+    player_key = make_player_key(c("Michael Pittman", "Alec Pierce")),
+    team_override = rep(NA_character_, 2),
+    games_floor = c(NA, 13),
+    games_cap = c(NA, 14),
+    ppg_pct = c(-0.07, 0),
+    ppg_floor = rep(NA_real_, 2),
+    p10_pct = c(-0.03, -0.03),
+    p90_pct = c(-0.04, 0),
+    note = c(
+      "Reduce Pittman modestly for limited touchdown upside in a lower-scoring environment.",
+      "Replace the stale expected-PUP discount after activation; retain only modest health and target-competition downside."
+    ),
+    stringsAsFactors = FALSE
+  )
+  context <- dplyr::bind_rows(
+    dplyr::filter(context, !.data$player_key %in% latest_context_2$player_key),
+    latest_context_2
   )
   out <- board
   if (!"context_adjustment_count" %in% names(out)) out$context_adjustment_count <- 0L
@@ -15625,6 +16197,21 @@ sos_apply_te_final_review_projection_context <- function(
       "Correct Waller's team from Miami to Carolina without forcing a role projection before first-team usage is established."
     ),
     stringsAsFactors = FALSE
+  )
+  latest_context <- data.frame(
+    player_key = make_player_key("Colston Loveland"),
+    team_override = NA_character_,
+    games_floor = 15,
+    games_cap = NA_real_,
+    ppg_pct = 0.08,
+    p10_pct = 0,
+    p90_pct = 0.07,
+    note = "Increase Loveland's central and ceiling projection for the established role and breakout upside.",
+    stringsAsFactors = FALSE
+  )
+  context <- dplyr::bind_rows(
+    dplyr::filter(context, !.data$player_key %in% latest_context$player_key),
+    latest_context
   )
   out <- board
   if (!"context_adjustment_count" %in% names(out)) out$context_adjustment_count <- 0L
@@ -15811,6 +16398,41 @@ sos_apply_dst_final_review_projection_context <- function(
     )
   }
 
+  rows <- which(
+    out$position == "DST" &
+      out$player_key == make_player_key("Houston Texans")
+  )
+  if (length(rows) > 0L) {
+    before_ppg <- sos_prob_num(out$adjusted_projected_ppg[rows])
+    after_ppg <- before_ppg * 1.02
+    note <- paste(
+      "Increase Houston modestly so its projection supports the No. 1 DST rank;",
+      "keep the adjustment small relative to Seattle."
+    )
+    out$dst_final_review_projection_applied[rows] <- TRUE
+    out$dst_final_review_ppg_before[rows] <- before_ppg
+    out$dst_final_review_ppg_after[rows] <- after_ppg
+    out$dst_final_review_total_multiplier[rows] <- 1.02
+    out$dst_final_review_note[rows] <- note
+    out$adjusted_projected_ppg[rows] <- after_ppg
+    for (col in intersect(
+      c(
+        "adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points",
+        "adjusted_p75_points", "adjusted_p90_points"
+      ),
+      names(out)
+    )) {
+      out[[col]][rows] <- pmax(0, sos_prob_num(out[[col]][rows]) * 1.02)
+    }
+    out$context_adjustment_count[rows] <- dplyr::coalesce(
+      sos_prob_num(out$context_adjustment_count[rows]), 0
+    ) + 1L
+    existing_note <- dplyr::coalesce(as.character(out$manual_context_note[rows]), "")
+    out$manual_context_note[rows] <- ifelse(
+      nzchar(existing_note), paste(existing_note, note, sep = " | "), note
+    )
+  }
+
   out <- sos_enforce_projection_ranges(
     out,
     c(
@@ -15838,12 +16460,14 @@ sos_apply_dst_final_review_projection_context <- function(
 build_core_sos_dst_final_review_projection_audit <- function(board, prediction_season = 2026L) {
   dst <- board[board$position == "DST", , drop = FALSE]
   rams <- dst$player_key == make_player_key("Los Angeles Rams")
+  houston <- dst$player_key == make_player_key("Houston Texans")
   data.frame(
     position = "DST",
     prediction_season = as.integer(prediction_season[[1]]),
     rows = nrow(dst),
     adjusted_rows = sum(dst$dst_final_review_projection_applied, na.rm = TRUE),
     rams_rows = sum(rams, na.rm = TRUE),
+    houston_rows = sum(houston, na.rm = TRUE),
     max_abs_ppg_pct = max(
       abs(dst$dst_final_review_ppg_after / pmax(dst$dst_final_review_ppg_before, 1e-6) - 1),
       na.rm = TRUE
@@ -15857,7 +16481,8 @@ build_core_sos_dst_final_review_projection_audit <- function(board, prediction_s
     ),
     status = if (
       sum(rams, na.rm = TRUE) == 1L &&
-        sum(dst$dst_final_review_projection_applied, na.rm = TRUE) == 1L &&
+        sum(houston, na.rm = TRUE) == 1L &&
+        sum(dst$dst_final_review_projection_applied, na.rm = TRUE) == 2L &&
         all(is.finite(dst$adjusted_p50_points)) &&
         max(
           abs(dst$dst_final_review_ppg_after / pmax(dst$dst_final_review_ppg_before, 1e-6) - 1),
@@ -15868,31 +16493,175 @@ build_core_sos_dst_final_review_projection_audit <- function(board, prediction_s
   )
 }
 
+sos_apply_aug22_k_projection_context <- function(board, prediction_season = 2026L) {
+  if (is.null(board) || nrow(board) == 0L || as.integer(prediction_season[[1]]) != 2026L) {
+    return(board)
+  }
+  out <- board
+  rows <- which(
+    out$position == "K" &
+      out$player_key == make_player_key("Brandon Aubrey")
+  )
+  if (length(rows) == 0L) return(out)
+  if (!"context_adjustment_count" %in% names(out)) out$context_adjustment_count <- 0L
+  if (!"manual_context_note" %in% names(out)) out$manual_context_note <- ""
+  multiplier <- 1.08
+  out$adjusted_projected_ppg[rows] <- pmax(
+    0,
+    sos_prob_num(out$adjusted_projected_ppg[rows]) * multiplier
+  )
+  for (col in intersect(
+    c(
+      "adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points",
+      "adjusted_p75_points", "adjusted_p90_points"
+    ),
+    names(out)
+  )) {
+    out[[col]][rows] <- pmax(0, sos_prob_num(out[[col]][rows]) * multiplier)
+  }
+  note <- paste(
+    "Increase Aubrey's opportunity projection modestly so his production supports",
+    "the No. 1 kicker rank over Fairbairn."
+  )
+  out$context_adjustment_count[rows] <- dplyr::coalesce(
+    sos_prob_num(out$context_adjustment_count[rows]), 0
+  ) + 1L
+  existing_note <- dplyr::coalesce(as.character(out$manual_context_note[rows]), "")
+  out$manual_context_note[rows] <- ifelse(
+    nzchar(existing_note), paste(existing_note, note, sep = " | "), note
+  )
+  out
+}
+
 sos_apply_nfl_context_brief <- function(board, prediction_season = 2026L) {
   if (is.null(board) || nrow(board) == 0L || as.integer(prediction_season[[1]]) != 2026L) {
     return(list(board = board, audit = data.frame()))
   }
-  context <- data.frame(
-    position = c("WR", "RB", "RB", "WR", "TE", "TE"),
-    player = c("Jayden Higgins", "Alvin Kamara", "Najee Harris", "Keenan Allen", "Darren Waller", "Zach Ertz"),
-    team_override = c("HOU", "NO", "NYG", "IND", "CAR", "FA"),
-    games_delta = c(0, -1.5, 0, 0, 0, 0),
-    games_cap = c(0, NA, NA, 13, NA, 0),
-    ppg_multiplier = c(0, 1, 1, 0.90, 1, 0),
-    forced_inactive = c(TRUE, FALSE, FALSE, FALSE, FALSE, TRUE),
+  context <- dplyr::bind_rows(
+    data.frame(
+    position = c(
+      "WR", "RB", "RB", "WR", "TE", "TE",
+      "RB", "QB", "RB", "WR", "TE", "RB", "RB",
+      "TE", "TE", "TE", "WR", "WR", "WR", "WR", "WR"
+    ),
+    player = c(
+      "Jayden Higgins", "Alvin Kamara", "Najee Harris", "Keenan Allen", "Darren Waller", "Zach Ertz",
+      "Jerome Ford", "Justin Herbert", "Omarion Hampton", "Ladd McConkey", "Sam LaPorta",
+      "TreVeyon Henderson", "Rhamondre Stevenson", "Oronde Gadsden II", "David Njoku", "Charlie Kolar",
+      "Sterling Shepard", "Zay Jones", "Tank Dell", "Jaylin Noel", "Xavier Hutchinson"
+    ),
+    team_override = c(
+      "HOU", "NO", "NYG", "IND", "CAR", "FA",
+      "WAS", "LAC", "LAC", "LAC", "DET", "NE", "NE",
+      "LAC", "LAC", "LAC", "HOU", "HOU", "HOU", "HOU", "HOU"
+    ),
+    games_delta = c(
+      0, -1.5, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0
+    ),
+    games_cap = c(
+      0, NA, NA, 14, NA, 0,
+      0, NA, NA, NA, NA, NA, NA,
+      NA, NA, NA, NA, NA, NA, NA, NA
+    ),
+    ppg_multiplier = c(
+      0, 1, 1, 0.78, 1, 0,
+      0, 0.985, 0.98, 0.985, 1, 0.96, 1.05,
+      0.60, 1.15, 1.60, 1, 1, 0.90, 1, 1
+    ),
+    p10_multiplier = rep(1, 21),
+    p25_multiplier = rep(1, 21),
+    p75_multiplier = rep(1, 21),
+    p90_multiplier = rep(1, 21),
+    forced_inactive = c(
+      TRUE, FALSE, FALSE, FALSE, FALSE, TRUE,
+      TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE,
+      FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE
+    ),
     event_type = c(
       "season_ending_injury", "availability_only_injury", "confirmed_signing",
-      "confirmed_signing_and_part_time_role", "source_team_correction", "unsigned_inactive"
+      "confirmed_signing_and_part_time_role", "source_team_correction", "unsigned_inactive",
+      "season_ending_injury", "offensive_line_efficiency_downgrade",
+      "offensive_line_efficiency_downgrade", "offensive_line_efficiency_downgrade",
+      "acute_hip_risk_superseded_by_return", "depth_chart_workload_reallocation",
+      "depth_chart_workload_reallocation", "depth_chart_role_downgrade",
+      "depth_chart_role_upgrade", "depth_chart_role_upgrade",
+      "confirmed_roster_addition", "confirmed_roster_addition",
+      "receiver_room_target_normalization", "receiver_room_target_normalization",
+      "receiver_room_target_normalization"
     ),
     note = c(
       "Confirmed torn ACL; out for the season. Remove the stale WR2 increase and set the 2026 projection inactive without changing OMFG.",
       "Confirmed MCL sprain expected to cost at least one month. Apply availability only because the reduced role is already reflected upstream.",
       "Confirmed signing with the New York Giants. Correct the team while preserving the current low initial role projection.",
-      "Confirmed signing with Indianapolis. Restore him to the active pool as a part-time WR3/11-personnel option with a 13-game cap.",
+      "Confirmed signing with Indianapolis. Project 14 games but reduce his game-to-game target share as a rotational WR3 with Alec Pierce active.",
       "Keep the corrected Carolina team source; no additional projection change is applied.",
-      "Not signed with a team; remove from the active 2026 projection pool without changing OMFG."
+      "Not signed with a team; remove from the active 2026 projection pool without changing OMFG.",
+      "Confirmed season-ending preseason injury; set games and production to zero without changing OMFG.",
+      "Apply a 1.5 percent team-efficiency reduction after Tyler Biadasz's major knee injury; retain Herbert's established profile.",
+      "Apply a 2 percent team-efficiency reduction after Tyler Biadasz's major knee injury; do not change Hampton's role or OMFG.",
+      "Apply a 1.5 percent team-efficiency reduction after Tyler Biadasz's major knee injury; retain McConkey's target role.",
+      "September 3 brief supersedes the acute hip-only downside penalty after return to team work; retain chronic-risk context and central projection.",
+      "Reallocate a modest share of the New England backfield from Henderson after Stevenson was named the starter.",
+      "Reallocate a modest share of the New England backfield to Stevenson after he was named the starter.",
+      "Reduce Gadsden materially after current usage placed Kolar and Njoku ahead of him in the Chargers tight-end rotation.",
+      "Raise Njoku from the stale low-depth baseline after current Chargers usage placed him ahead of Gadsden.",
+      "Raise Kolar from a very low base after first-team usage established him at the front of the Chargers tight-end rotation.",
+      "Add Shepard to Houston's active receiver room from the authoritative context roster overlay; let the model seed his veteran profile.",
+      "Add Jones to Houston's active receiver room from the authoritative context roster overlay; let the model seed his veteran profile.",
+      "Normalize Houston secondary receiver volume after the Shepard and Jones additions; Nico Collins remains unchanged.",
+      "Preserve Noel's pre-brief baseline; the approved Week 1 depth order is applied in the final context delta.",
+      "Preserve Hutchinson's pre-brief baseline; the approved Week 1 depth order is applied in the final context delta."
     ),
-    stringsAsFactors = FALSE
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      position = c(
+        "RB", "WR", "WR", "RB", "K", "RB",
+        "RB", "RB", "RB", "RB", "RB", "RB"
+      ),
+      player = c(
+        "Trey Benson", "Jake Bobo", "Kayshon Boutte", "Zamir White",
+        "Daniel Carlson", "Ashton Jeanty", "Kendre Miller", "Devin Neal",
+        "Jaydon Blue", "Malik Davis", "DJ Giddens", "Seth McGowan"
+      ),
+      team_override = c(
+        "ARI", "SEA", "HOU", "NO", "NO", "LV",
+        "NO", "NO", "DAL", "DAL", "IND", "IND"
+      ),
+      games_delta = rep(0, 12),
+      games_cap = c(0, 0, rep(NA_real_, 10)),
+      ppg_multiplier = c(0, 0, 1, 0.95, 0.92, 1, 1.08, 0.82, 0.95, 1.08, 0.98, 1.02),
+      p10_multiplier = c(1, 1, 1, 1, 1, 0.70, rep(1, 6)),
+      p25_multiplier = c(1, 1, 1, 1, 1, 0.85, rep(1, 6)),
+      p75_multiplier = rep(1, 12),
+      p90_multiplier = rep(1, 12),
+      forced_inactive = c(TRUE, TRUE, rep(FALSE, 10)),
+      event_type = c(
+        "waived_injured_inactive", "season_ending_injury", "confirmed_trade",
+        "confirmed_trade_late_arrival", "provisional_kicker_competition_leader",
+        "downside_only_ankle_uncertainty", "week1_role_signal",
+        "hamstring_reaggravation", "depth_chart_workload_reallocation",
+        "depth_chart_workload_reallocation", "availability_watch",
+        "preseason_usage_watch"
+      ),
+      note = c(
+        "Arizona waived Benson with an injury designation; set his 2026 projection inactive without changing OMFG.",
+        "Seattle placed Bobo on season-ending injured reserve; set his 2026 projection inactive without changing OMFG.",
+        "Confirmed trade from New England to Houston. Correct the team and place Boutte behind Nico Collins without adding a blind production bonus.",
+        "Confirmed trade from San Francisco to New Orleans. Add White to the active Saints backfield with a small late-arrival discount.",
+        "Confirmed New Orleans signing. Treat Carlson as the provisional competition leader while discounting the central projection for unresolved job security.",
+        "Retain Jeanty's central season projection after the reported non-long-term ankle sprain, but widen the downside until a practice timetable is available.",
+        "Increase Miller modestly after he opened the preseason game and handled the first three New Orleans carries.",
+        "Reduce Neal after he re-aggravated his hamstring, with the Zamir White acquisition adding further role competition.",
+        "Reduce Blue modestly after Malik Davis handled the stronger first-quarter preseason workload.",
+        "Increase Davis modestly after the stronger first-quarter preseason workload while preserving an unresolved Dallas committee.",
+        "Apply only a small availability discount; Indianapolis still lists Giddens ahead of McGowan on its official depth chart.",
+        "Apply only a small preseason-usage increase; do not override Indianapolis' official Giddens-ahead depth order yet."
+      ),
+      stringsAsFactors = FALSE
+    )
   ) |>
     dplyr::mutate(player_key = make_player_key(.data$player))
 
@@ -15906,6 +16675,8 @@ sos_apply_nfl_context_brief <- function(board, prediction_season = 2026L) {
   out$nfl_context_brief_games_after <- NA_real_
   out$nfl_context_brief_p50_before <- NA_real_
   out$nfl_context_brief_p50_after <- NA_real_
+  out$nfl_context_brief_p10_multiplier <- 1
+  out$nfl_context_brief_p25_multiplier <- 1
   out$nfl_context_brief_note <- ""
 
   for (i in seq_len(nrow(context))) {
@@ -15925,6 +16696,11 @@ sos_apply_nfl_context_brief <- function(board, prediction_season = 2026L) {
     if (isTRUE(context$forced_inactive[[i]])) {
       after_games <- 0
       after_ppg <- 0
+      if ("active_projection_pool" %in% names(out)) out$active_projection_pool[rows] <- FALSE
+      if ("article_eligible" %in% names(out)) out$article_eligible[rows] <- FALSE
+      if ("eligibility_reason" %in% names(out)) {
+        out$eligibility_reason[rows] <- "nfl_context_brief_inactive"
+      }
     }
     after_p50 <- after_games * after_ppg
     total_multiplier <- ifelse(before_p50 > 1e-8, after_p50 / before_p50, 1)
@@ -15933,11 +16709,18 @@ sos_apply_nfl_context_brief <- function(board, prediction_season = 2026L) {
     out$manual_team_override[rows] <- context$team_override[[i]]
     out$adjusted_projected_games[rows] <- after_games
     out$adjusted_projected_ppg[rows] <- after_ppg
-    for (column in intersect(
-      c("adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points", "adjusted_p75_points", "adjusted_p90_points"),
-      names(out)
-    )) {
-      out[[column]][rows] <- pmax(0, sos_prob_num(out[[column]][rows]) * total_multiplier)
+    range_modifiers <- c(
+      adjusted_p10_points = 1,
+      adjusted_p25_points = 1,
+      adjusted_p50_points = 1,
+      adjusted_p75_points = context$p75_multiplier[[i]],
+      adjusted_p90_points = context$p90_multiplier[[i]]
+    )
+    for (column in intersect(names(range_modifiers), names(out))) {
+      out[[column]][rows] <- pmax(
+        0,
+        sos_prob_num(out[[column]][rows]) * total_multiplier * range_modifiers[[column]]
+      )
     }
     out$nfl_context_brief_applied[rows] <- TRUE
     out$nfl_context_brief_event_type[rows] <- context$event_type[[i]]
@@ -15945,6 +16728,8 @@ sos_apply_nfl_context_brief <- function(board, prediction_season = 2026L) {
     out$nfl_context_brief_games_after[rows] <- after_games
     out$nfl_context_brief_p50_before[rows] <- before_p50
     out$nfl_context_brief_p50_after[rows] <- after_p50
+    out$nfl_context_brief_p10_multiplier[rows] <- context$p10_multiplier[[i]]
+    out$nfl_context_brief_p25_multiplier[rows] <- context$p25_multiplier[[i]]
     out$nfl_context_brief_note[rows] <- context$note[[i]]
     out$context_adjustment_count[rows] <- dplyr::coalesce(
       sos_prob_num(out$context_adjustment_count[rows]), 0
@@ -15969,7 +16754,20 @@ sos_apply_nfl_context_brief <- function(board, prediction_season = 2026L) {
     ) |>
     dplyr::ungroup()
 
-  audit <- out |>
+  audit_source <- out
+  if (!"active_projection_pool" %in% names(audit_source)) {
+    inactive_context_keys <- paste(
+      context$position[context$forced_inactive],
+      context$player_key[context$forced_inactive],
+      sep = "|"
+    )
+    audit_source$active_projection_pool <- !(
+      paste(audit_source$position, audit_source$player_key, sep = "|") %in%
+        inactive_context_keys
+    )
+  }
+
+  audit <- audit_source |>
     dplyr::filter(.data$player_key %in% context$player_key) |>
     dplyr::transmute(
       position = .data$position,
@@ -15995,9 +16793,984 @@ sos_apply_nfl_context_brief <- function(board, prediction_season = 2026L) {
     by = c("position", "player_key")
   )
   if (nrow(missing) > 0L || nrow(audit) != nrow(context) || any(audit$status != "PASS")) {
-    stop("NFL Context Brief SOS audit failed.", call. = FALSE)
+    missing_label <- if (nrow(missing) > 0L) {
+      paste(paste0(missing$position, ":", missing$player), collapse = ", ")
+    } else {
+      "none"
+    }
+    stop(
+      "NFL Context Brief SOS audit failed. Missing context players: ", missing_label,
+      "; matched audit rows: ", nrow(audit), "/", nrow(context), ".",
+      call. = FALSE
+    )
   }
   list(board = out, audit = audit)
+}
+
+sos_apply_aug31_context_delta <- function(board, prediction_season = 2026L) {
+  if (is.null(board) || nrow(board) == 0L || as.integer(prediction_season[[1]]) != 2026L) {
+    return(list(board = board, audit = data.frame(), context = data.frame()))
+  }
+  context <- data.frame(
+    position = c(
+      "WR", "WR", "RB", "RB", "RB", "RB", "RB", "TE", "RB", "RB", "WR",
+      "RB", "WR", "WR", "WR", "K", "K", "WR", "QB", "RB", "RB", "DST", "DST"
+    ),
+    player = c(
+      "Ja'Kobi Lane", "Cedric Tillman", "Jaydon Blue", "Phil Mafah", "Israel Abanikanda",
+      "Emari Demercado", "Jaleel McLaughlin", "Justin Joly", "Josh Jacobs", "Kaleb Johnson",
+      "Alec Pierce", "Jarquez Hunter", "Tutu Atwell", "Jordyn Tyson", "Calvin Austin",
+      "Blake Grupe", "Cade York", "Deebo Samuel", "Will Levis", "Michael Carter",
+      "Emmett Johnson", "Los Angeles Rams", "Green Bay Packers"
+    ),
+    team_override = c(
+      "BAL", "FA", "FA", "FA", "FA", "DAL", "FA", "MIA", "GB", "GB", "IND",
+      "MIA", "LAR", "NO", "NYG", "NYJ", "FA", "SF", "FA", "PHI", "KC", "LAR", "GB"
+    ),
+    games_floor = c(rep(NA_real_, 10), 13, rep(NA_real_, 12)),
+    games_cap = c(rep(NA_real_, 8), 8.5, NA, 14, NA, NA, 9, rep(NA_real_, 9)),
+    ppg_multiplier = c(
+      1.10, 1, 1, 1, 1, 0.90, 1, 1, 0.95, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1.32, 1.06, 0.92
+    ),
+    forced_inactive = c(
+      FALSE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, FALSE, FALSE, FALSE, FALSE,
+      FALSE, FALSE, FALSE, TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, FALSE, FALSE, FALSE
+    ),
+    required_match = c(
+      TRUE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE, TRUE, TRUE, TRUE,
+      TRUE, TRUE, TRUE, FALSE, TRUE, FALSE, TRUE, FALSE, FALSE, TRUE, TRUE, TRUE
+    ),
+    event_type = c(
+      "confirmed_depth_upgrade", "waived_inactive", "waived_inactive", "waived_inactive",
+      "waived_inactive", "confirmed_team_change", "waived_inactive", "confirmed_team_change",
+      "commissioner_exempt_availability", "confirmed_team_change", "activated_from_pup",
+      "confirmed_team_change", "confirmed_team_change", "return_designated_ir",
+      "season_ending_injury", "confirmed_active_kicker_starter", "released_kicker_inactive",
+      "confirmed_team_change", "waived_inactive", "waived_inactive",
+      "depth_chart_role_upgrade", "defensive_personnel_upgrade", "defensive_personnel_downgrade"
+    ),
+    note = c(
+      "Use the current nflverse WR3 depth and add only the incremental Lane route-share increase.",
+      "Waived by Cleveland; remove the stale season projection pending a new team.",
+      "Waived by Dallas; remove the stale season projection pending a new team.",
+      "Waived by Dallas; remove the stale season projection pending a new team.",
+      "Waived by Dallas; remove the stale season projection pending a new team.",
+      "Demercado is Dallas RB3 after the August 31 claim; replace obsolete Kansas City attribution and retain the existing 0.90 role multiplier without stacking a new discount.",
+      "Waived by Denver; remove the stale season projection pending a new team.",
+      "Move Joly from Denver to Miami while preserving the already-discounted role projection.",
+      "Cap Jacobs near eight and a half games and apply a modest healthy-game role discount for commissioner-exempt uncertainty; Lloyd is the interim starter until Jacobs returns.",
+      "Move Johnson from Pittsburgh to Green Bay; retain a conservative depth-back projection.",
+      "Replace the expected-PUP assumption with a 13-to-14-game active projection while retaining competition risk.",
+      "Move Jarquez Hunter from the Rams to Miami without a blind role bonus.",
+      "Correct Atwell from Miami to the Rams without a blind role bonus.",
+      "Cap Tyson at nine games for return-designated injured reserve; preserve his healthy-game profile.",
+      "Move Austin to the Giants while retaining the confirmed injury-related inactive projection status.",
+      "Set Grupe as the confirmed Jets K1 after the official transaction update; Jason Sanders is practice-squad depth.",
+      "Released by the Jets; remove York from the active season projection pool.",
+      "Correct Deebo from Washington to San Francisco without stacking a new role multiplier.",
+      "Move Carter to Philadelphia depth and remove the obsolete Tennessee waiver status.",
+      "Waived by Tennessee; remove the stale season projection pending a new team.",
+      "Sep. 5 user role review: replace the prior 20-percent role uplift with 32 percent for a more viable Walker handcuff; retain uncertainty and do not assume a Walker injury.",
+      "Apply a six-percent Rams DST increase for Aaron Donald's confirmed return.",
+      "Apply an eight-percent Packers DST reduction while Micah Parsons is unavailable."
+    ),
+    stringsAsFactors = FALSE
+  )
+  context <- dplyr::bind_rows(
+    context,
+    data.frame(
+      position = c(rep("RB", 5), "WR"),
+      player = c(
+        "Ashton Jeanty", "Mike Washington Jr.", "MarShawn Lloyd",
+        "Tyrone Tracy", "Tyler Allgeier", "Keenan Allen"
+      ),
+      team_override = c("LV", "LV", "GB", "NYG", "ARI", "IND"),
+      games_floor = c(NA_real_, 12.5, 13.5, NA_real_, 15, 14),
+      games_cap = c(15, NA_real_, NA_real_, 13, NA_real_, 14),
+      ppg_multiplier = c(0.96, 1.12, 1.32, 0.84, 1.05, 1),
+      forced_inactive = rep(FALSE, 6),
+      required_match = rep(TRUE, 6),
+      event_type = c(
+        "injury_and_backfield_usage_risk",
+        "secondary_role_upgrade",
+        "interim_starter_upgrade",
+        "handcuff_competition_downgrade",
+        "secondary_role_upgrade",
+        "reduced_role_with_pierce_active"
+      ),
+      note = c(
+        "Reduce Jeanty's central projection modestly for the active injury and Mike Washington usage threat; Washington remains a secondary back rather than a full committee partner.",
+        "Increase Washington's secondary workload to reflect a credible role behind the injured Jeanty without projecting a true committee split.",
+        "Increase Lloyd for the interim starting role while Jacobs is on the commissioner exempt list, retaining uncertainty about how long the opening lasts.",
+        "Reduce Tracy further after the approved Week 1 depth chart placed him fourth behind Skattebo, Najee Harris, and Singletary.",
+        "Sep. 5 user role review: Arizona RB2 with a season-long complementary role; apply a modest five-percent workload increase, not an Atlanta-specific bonus.",
+        "Project Allen for 14 games, but reduce his weekly route and target expectation with Alec Pierce active; treat the possible suspension as downside rather than the central games forecast."
+      ),
+      stringsAsFactors = FALSE
+    )
+  ) |>
+    dplyr::mutate(player_key = make_player_key(.data$player))
+
+  out <- board
+  if (!"context_adjustment_count" %in% names(out)) out$context_adjustment_count <- 0L
+  if (!"manual_context_note" %in% names(out)) out$manual_context_note <- ""
+  if (!"manual_team_override" %in% names(out)) out$manual_team_override <- ""
+  out$aug31_context_delta_applied <- FALSE
+  out$aug31_context_delta_type <- ""
+  out$aug31_context_delta_p50_before <- NA_real_
+  out$aug31_context_delta_p50_after <- NA_real_
+  out$aug31_context_delta_note <- ""
+
+  for (i in seq_len(nrow(context))) {
+    rows <- which(out$position == context$position[[i]] & out$player_key == context$player_key[[i]])
+    if (length(rows) == 0L) next
+    before_games <- sos_prob_num(out$adjusted_projected_games[rows])
+    before_ppg <- sos_prob_num(out$adjusted_projected_ppg[rows])
+    before_p50 <- sos_prob_num(out$adjusted_p50_points[rows])
+    after_games <- before_games
+    if (is.finite(context$games_floor[[i]])) after_games <- pmax(after_games, context$games_floor[[i]])
+    if (is.finite(context$games_cap[[i]])) after_games <- pmin(after_games, context$games_cap[[i]])
+    after_ppg <- pmax(0, before_ppg * context$ppg_multiplier[[i]])
+    if (isTRUE(context$forced_inactive[[i]])) {
+      after_games <- 0
+      after_ppg <- 0
+      if ("active_projection_pool" %in% names(out)) out$active_projection_pool[rows] <- FALSE
+      if ("article_eligible" %in% names(out)) out$article_eligible[rows] <- FALSE
+      if ("eligibility_reason" %in% names(out)) out$eligibility_reason[rows] <- "aug31_confirmed_inactive"
+    }
+    after_p50 <- after_games * after_ppg
+    total_multiplier <- ifelse(before_p50 > 1e-8, after_p50 / before_p50, ifelse(after_p50 <= 1e-8, 0, 1))
+    if (nzchar(context$team_override[[i]])) {
+      out$current_team[rows] <- context$team_override[[i]]
+      out$next_team[rows] <- context$team_override[[i]]
+      out$manual_team_override[rows] <- context$team_override[[i]]
+    }
+    out$adjusted_projected_games[rows] <- after_games
+    out$adjusted_projected_ppg[rows] <- after_ppg
+    for (column in intersect(
+      c("adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points", "adjusted_p75_points", "adjusted_p90_points"),
+      names(out)
+    )) {
+      out[[column]][rows] <- pmax(0, sos_prob_num(out[[column]][rows]) * total_multiplier)
+    }
+    out$aug31_context_delta_applied[rows] <- TRUE
+    out$aug31_context_delta_type[rows] <- context$event_type[[i]]
+    out$aug31_context_delta_p50_before[rows] <- before_p50
+    out$aug31_context_delta_p50_after[rows] <- after_p50
+    out$aug31_context_delta_note[rows] <- context$note[[i]]
+    out$context_adjustment_count[rows] <- dplyr::coalesce(sos_prob_num(out$context_adjustment_count[rows]), 0) + 1L
+    existing_note <- dplyr::coalesce(as.character(out$manual_context_note[rows]), "")
+    out$manual_context_note[rows] <- ifelse(
+      nzchar(existing_note), paste(existing_note, context$note[[i]], sep = " | "), context$note[[i]]
+    )
+  }
+  out <- sos_enforce_projection_ranges(
+    out,
+    c("adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points", "adjusted_p75_points", "adjusted_p90_points")
+  ) |>
+    dplyr::mutate(
+      adjusted_average_range_score = (
+        .data$adjusted_p25_points + .data$adjusted_p50_points + .data$adjusted_p75_points
+      ) / 3
+    ) |>
+    dplyr::group_by(.data$position) |>
+    dplyr::mutate(
+      manual_adjusted_projection_rank = rank(-.data$adjusted_average_range_score, ties.method = "first", na.last = "keep")
+    ) |>
+    dplyr::ungroup()
+
+  audit_source <- out
+  if (!"active_projection_pool" %in% names(audit_source)) {
+    inactive_context_keys <- paste(
+      context$position[context$forced_inactive],
+      context$player_key[context$forced_inactive],
+      sep = "|"
+    )
+    audit_source$active_projection_pool <- !(
+      paste(audit_source$position, audit_source$player_key, sep = "|") %in%
+        inactive_context_keys
+    )
+  }
+
+  audit <- audit_source |>
+    dplyr::filter(.data$aug31_context_delta_applied) |>
+    dplyr::transmute(
+      position = .data$position,
+      prediction_season = as.integer(prediction_season),
+      player = .data$player,
+      current_team = .data$current_team,
+      event_type = .data$aug31_context_delta_type,
+      active_projection_pool = dplyr::coalesce(.data$active_projection_pool, FALSE),
+      p50_before = .data$aug31_context_delta_p50_before,
+      p50_after = .data$aug31_context_delta_p50_after,
+      status = dplyr::if_else(
+        is.finite(.data$p50_after) & .data$p50_after >= 0,
+        "PASS", "FAIL"
+      )
+    ) |>
+    dplyr::arrange(.data$position, .data$player)
+  missing_required <- dplyr::anti_join(
+    dplyr::filter(context, .data$required_match),
+    dplyr::distinct(out, .data$position, .data$player_key),
+    by = c("position", "player_key")
+  )
+  if (nrow(missing_required) > 0L || any(audit$status != "PASS")) {
+    stop(
+      "Aug. 31 SOS context delta audit failed. Missing required rows: ", nrow(missing_required),
+      "; failed rows: ", sum(audit$status != "PASS"), ".",
+      call. = FALSE
+    )
+  }
+  list(board = out, audit = audit, context = context)
+}
+
+sos_apply_sep1_depth_context_delta <- function(board, prediction_season = 2026L) {
+  if (is.null(board) || nrow(board) == 0L || as.integer(prediction_season[[1]]) != 2026L) {
+    return(list(board = board, audit = data.frame(), context = data.frame()))
+  }
+  context <- data.frame(
+    position = c(
+      rep("QB", 3), rep("RB", 6), rep("WR", 11), rep("TE", 16), rep("K", 2)
+    ),
+    player = c(
+      "Joshua Dobbs", "Quinn Ewers", "Kyle McCord",
+      "Corey Kiner", "Zamir White", "Najee Harris", "Travis Homer", "George Holani", "Jadarian Price",
+      "Zachariah Branch", "Sterling Shepard", "Zay Jones", "Xavier Hutchinson", "Jaylin Noel",
+      "Kayshon Boutte", "Dont'e Thornton", "Jalen Tolbert", "Caleb Douglas", "Chris Bell", "Xavier Restrepo",
+      "Hunter Long", "Mark Redman", "Tip Reiman", "Tommy Tremble", "Darren Waller",
+      "Mitchell Evans", "Ja'Tavion Sanders", "Tanner Hudson", "Jonnu Smith", "Charlie Kolar",
+      "David Njoku", "Oronde Gadsden", "Colby Parkinson", "Tyler Higbee", "Terrance Ferguson",
+      "Max Klare", "Blake Grupe", "Jason Sanders"
+    ),
+    team_override = c(
+      "DET", "JAX", "MIA",
+      "NE", "FA", "NYG", "FA", "SEA", "SEA",
+      "ATL", "FA", "FA", "HOU", "HOU", "HOU", "FA", "MIA", "MIA", "MIA", "FA",
+      "ARI", "GB", "ARI", "CAR", "CAR", "CAR", "CAR", "FA", "GB", "LAC",
+      "LAC", "LAC", "LAR", "LAR", "LAR", "LAR", "NYJ", "NYJ"
+    ),
+    games_floor = c(
+      rep(NA_real_, 38)
+    ),
+    games_cap = c(
+      rep(NA_real_, 22), 13, rep(NA_real_, 15)
+    ),
+    ppg_multiplier = c(
+      1, 1, 1,
+      1, 1, 1.05, 1, 1.05, 0.98,
+      0.90, 1, 1, 1.20, 1.10, 0.90, 1, 1.08, 1, 0.85, 1,
+      1, 1, 1, 1.10, 0.95, 1.05, 0.90, 1, 0.90, 1.10,
+      0.92, 0.88, 1.10, 1.02, 0.82, 0.85, 1, 1
+    ),
+    forced_inactive = c(
+      FALSE, FALSE, FALSE,
+      FALSE, TRUE, FALSE, TRUE, FALSE, FALSE,
+      FALSE, TRUE, TRUE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, FALSE, TRUE,
+      FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE,
+      FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE
+    ),
+    event_type = c(
+      "confirmed_team_depth_correction", "confirmed_team_depth_correction", "confirmed_team_depth_correction",
+      "confirmed_team_depth_correction", "practice_squad_inactive", "handcuff_competition_participant",
+      "practice_squad_inactive", "confirmed_rb2_role_upgrade", "team_volume_conservation",
+      "confirmed_wr4_role_downgrade", "not_on_depth_chart_inactive", "not_on_depth_chart_inactive",
+      "confirmed_wr2_role_upgrade", "confirmed_wr3_role_upgrade", "confirmed_wr4_role_downgrade",
+      "injured_reserve_inactive", "confirmed_wr2_role_upgrade", "confirmed_wr3_role", "confirmed_wr4_role_downgrade",
+      "waived_inactive",
+      "confirmed_team_depth_correction", "confirmed_team_depth_correction", "pup_availability_cap",
+      "confirmed_te1_role_upgrade", "confirmed_te2_role_downgrade", "confirmed_te3_role_upgrade",
+      "confirmed_te4_role_downgrade", "released_inactive", "confirmed_te2_role_seed",
+      "confirmed_te1_role_upgrade", "confirmed_te2_role_downgrade", "confirmed_te3_role_downgrade",
+      "confirmed_te1_role_upgrade", "confirmed_te2_role", "confirmed_te3_role_downgrade",
+      "confirmed_te4_role_downgrade", "confirmed_active_kicker_starter", "practice_squad_inactive"
+    ),
+    note = c(
+      "Move Dobbs to Detroit as the approved Week 1 QB2 without changing his central role.",
+      "Move Ewers to Jacksonville as the approved Week 1 QB2 without changing his central role.",
+      "Move McCord to Miami as the approved Week 1 QB2 without changing his central role.",
+      "Move Kiner to New England as the approved Week 1 RB3 without adding a role bonus.",
+      "Zamir White is on the New Orleans practice squad; remove the central active-season projection unless elevated.",
+      "Najee Harris is part of an unresolved handcuff competition with Tyrone Tracy behind Skattebo; add only a small contingent-role share.",
+      "Travis Homer is practice-squad depth; remove the central active-season projection unless elevated.",
+      "Holani is the approved Seattle RB2; add a small receiving-role increase without overtaking Price.",
+      "Conserve Seattle backfield volume after confirming Holani as RB2.",
+      "Branch is Atlanta WR4 rather than WR2; reduce the central route and target expectation.",
+      "Shepard is absent from Houston's approved Week 1 depth chart; remove the obsolete active projection.",
+      "Zay Jones is absent from Houston's approved Week 1 depth chart; remove the obsolete active projection.",
+      "Hutchinson is Houston WR2; increase his secondary target share while leaving Nico Collins unchanged.",
+      "Noel is Houston WR3; add a modest secondary target-share increase.",
+      "Boutte is Houston WR4; reduce his central target share to conserve the receiver room.",
+      "Dont'e Thornton is on injured reserve; remove the active 2026 projection.",
+      "Tolbert is Miami WR2; increase his target share modestly.",
+      "Douglas is Miami WR3; retain the existing central projection under the corrected depth label.",
+      "Bell is Miami WR4 rather than WR2; reduce his central route and target expectation.",
+      "Restrepo was waived by Tennessee; remove the stale active projection.",
+      "Move Hunter Long to Arizona as the approved TE3 without a blind volume bonus.",
+      "Move Mark Redman to Green Bay as the approved TE4 without a blind volume bonus.",
+      "Tip Reiman is on PUP; cap season availability while preserving his limited healthy-game role.",
+      "Tremble is Carolina TE1; add a modest lead-role share.",
+      "Waller is Carolina TE2; reduce his central share modestly.",
+      "Mitchell Evans is Carolina TE3; add a small depth correction.",
+      "Ja'Tavion Sanders is Carolina TE4; reduce his central share and conserve team targets.",
+      "Tanner Hudson was released by Cincinnati; remove the active 2026 projection.",
+      "Seed Jonnu Smith conservatively as Green Bay TE2 rather than carrying his former Pittsburgh role.",
+      "Kolar is the Chargers TE1; add a modest lead-role share.",
+      "Njoku is the Chargers TE2; reduce his central share for the committee.",
+      "Gadsden is the Chargers TE3; reduce his central share for the committee.",
+      "Parkinson is the Rams TE1; restore a modest lead-role share.",
+      "Higbee is the Rams TE2; retain a near-neutral veteran share.",
+      "Ferguson is the Rams TE3; remove the stale lead-role assumption.",
+      "Klare is the Rams TE4; reduce the central share to conserve team tight-end targets.",
+      "Grupe is the confirmed Jets K1; retain an active starter projection.",
+      "Jason Sanders is Jets practice-squad depth; remove the central active-season projection."
+    ),
+    stringsAsFactors = FALSE
+  ) |>
+    dplyr::mutate(
+      player_key = make_player_key(.data$player),
+      required_match = TRUE
+    )
+
+  out <- board
+  if (!"context_adjustment_count" %in% names(out)) out$context_adjustment_count <- 0L
+  if (!"manual_context_note" %in% names(out)) out$manual_context_note <- ""
+  if (!"manual_team_override" %in% names(out)) out$manual_team_override <- ""
+  out$sep1_depth_context_applied <- FALSE
+  out$sep1_depth_context_type <- ""
+  out$sep1_depth_context_p50_before <- NA_real_
+  out$sep1_depth_context_p50_after <- NA_real_
+  out$sep1_depth_context_note <- ""
+
+  for (i in seq_len(nrow(context))) {
+    rows <- which(out$position == context$position[[i]] & out$player_key == context$player_key[[i]])
+    if (length(rows) == 0L) next
+    before_games <- sos_prob_num(out$adjusted_projected_games[rows])
+    before_ppg <- sos_prob_num(out$adjusted_projected_ppg[rows])
+    before_p50 <- sos_prob_num(out$adjusted_p50_points[rows])
+    after_games <- before_games
+    if (is.finite(context$games_floor[[i]])) after_games <- pmax(after_games, context$games_floor[[i]])
+    if (is.finite(context$games_cap[[i]])) after_games <- pmin(after_games, context$games_cap[[i]])
+    after_ppg <- pmax(0, before_ppg * context$ppg_multiplier[[i]])
+    if (isTRUE(context$forced_inactive[[i]])) {
+      after_games <- 0
+      after_ppg <- 0
+      if ("active_projection_pool" %in% names(out)) out$active_projection_pool[rows] <- FALSE
+      if ("article_eligible" %in% names(out)) out$article_eligible[rows] <- FALSE
+      if ("eligibility_reason" %in% names(out)) out$eligibility_reason[rows] <- "sep1_confirmed_inactive"
+    }
+    after_p50 <- after_games * after_ppg
+    total_multiplier <- ifelse(before_p50 > 1e-8, after_p50 / before_p50, ifelse(after_p50 <= 1e-8, 0, 1))
+    if (nzchar(context$team_override[[i]])) {
+      out$current_team[rows] <- context$team_override[[i]]
+      out$next_team[rows] <- context$team_override[[i]]
+      out$manual_team_override[rows] <- context$team_override[[i]]
+    }
+    out$adjusted_projected_games[rows] <- after_games
+    out$adjusted_projected_ppg[rows] <- after_ppg
+    for (column in intersect(
+      c("adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points", "adjusted_p75_points", "adjusted_p90_points"),
+      names(out)
+    )) {
+      out[[column]][rows] <- pmax(0, sos_prob_num(out[[column]][rows]) * total_multiplier)
+    }
+    out$sep1_depth_context_applied[rows] <- TRUE
+    out$sep1_depth_context_type[rows] <- context$event_type[[i]]
+    out$sep1_depth_context_p50_before[rows] <- before_p50
+    out$sep1_depth_context_p50_after[rows] <- after_p50
+    out$sep1_depth_context_note[rows] <- context$note[[i]]
+    out$context_adjustment_count[rows] <- dplyr::coalesce(sos_prob_num(out$context_adjustment_count[rows]), 0) + 1L
+    existing_note <- dplyr::coalesce(as.character(out$manual_context_note[rows]), "")
+    out$manual_context_note[rows] <- ifelse(
+      nzchar(existing_note), paste(existing_note, context$note[[i]], sep = " | "), context$note[[i]]
+    )
+  }
+
+  out <- sos_enforce_projection_ranges(
+    out,
+    c("adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points", "adjusted_p75_points", "adjusted_p90_points")
+  ) |>
+    dplyr::mutate(
+      adjusted_average_range_score = (
+        .data$adjusted_p25_points + .data$adjusted_p50_points + .data$adjusted_p75_points
+      ) / 3
+    ) |>
+    dplyr::group_by(.data$position) |>
+    dplyr::mutate(
+      manual_adjusted_projection_rank = rank(-.data$adjusted_average_range_score, ties.method = "first", na.last = "keep")
+    ) |>
+    dplyr::ungroup()
+
+  audit_source <- out
+  if (!"active_projection_pool" %in% names(audit_source)) {
+    inactive_context_keys <- paste(
+      context$position[context$forced_inactive],
+      context$player_key[context$forced_inactive],
+      sep = "|"
+    )
+    audit_source$active_projection_pool <- !(
+      paste(audit_source$position, audit_source$player_key, sep = "|") %in%
+        inactive_context_keys
+    )
+  }
+
+  audit <- audit_source |>
+    dplyr::filter(.data$sep1_depth_context_applied) |>
+    dplyr::transmute(
+      position = .data$position,
+      prediction_season = as.integer(prediction_season),
+      player = .data$player,
+      current_team = .data$current_team,
+      event_type = .data$sep1_depth_context_type,
+      active_projection_pool = dplyr::coalesce(.data$active_projection_pool, FALSE),
+      p50_before = .data$sep1_depth_context_p50_before,
+      p50_after = .data$sep1_depth_context_p50_after,
+      status = dplyr::if_else(is.finite(.data$p50_after) & .data$p50_after >= 0, "PASS", "FAIL")
+    ) |>
+    dplyr::arrange(.data$position, .data$player)
+  missing_required <- dplyr::anti_join(
+    dplyr::filter(context, .data$required_match),
+    dplyr::distinct(out, .data$position, .data$player_key),
+    by = c("position", "player_key")
+  )
+  if (nrow(missing_required) > 0L || any(audit$status != "PASS")) {
+    stop(
+      "Sep. 1 SOS depth/context audit failed. Missing required rows: ", nrow(missing_required),
+      if (nrow(missing_required) > 0L) paste0(
+        " [", paste(paste(missing_required$position, missing_required$player), collapse = "; "), "]"
+      ) else "",
+      "; failed rows: ", sum(audit$status != "PASS"), ".",
+      call. = FALSE
+    )
+  }
+  list(board = out, audit = audit, context = context)
+}
+
+sos_apply_sep2_post_cuts_context_delta <- function(board, prediction_season = 2026L) {
+  if (is.null(board) || nrow(board) == 0L || as.integer(prediction_season[[1]]) != 2026L) {
+    return(list(board = board, audit = data.frame(), context = data.frame()))
+  }
+
+  context <- data.frame(
+    position = c(rep("RB", 6), rep("WR", 3), rep("TE", 2), rep("K", 4)),
+    player = c(
+      "Isiah Pacheco", "Jacob Saylors", "Tyrone Tracy", "Najee Harris",
+      "Malik Davis", "Braelon Allen",
+      "Matthew Golden", "Ted Hurst III", "Malachi Fields",
+      "Tucker Kraft", "George Kittle",
+      "Dominic Zvada", "Matt Gay", "Drew Stevens", "Riley Patterson"
+    ),
+    team_override = c(
+      "DET", "DET", "NYG", "NYG", "DAL", "NYJ",
+      "GB", "TB", "NYG", "GB", "SF",
+      "NYG", "LV", "WAS", "MIA"
+    ),
+    games_floor = c(
+      NA, 10, NA, NA, NA, NA,
+      NA, NA, NA, NA, NA,
+      NA, NA, NA, NA
+    ),
+    games_cap = c(
+      13, NA, NA, NA, NA, NA,
+      NA, NA, NA, NA, NA,
+      NA, NA, NA, NA
+    ),
+    ppg_multiplier = c(
+      0.88, 1.18, 0.86, 1.095, 1.10, 1.15,
+      1.18, 1.12, 1.18, 1.08, 0.98,
+      1, 1, 1, 1
+    ),
+    ppg_floor = c(
+      NA, 5, NA, NA, NA, NA,
+      NA, NA, NA, NA, NA,
+      NA, NA, NA, NA
+    ),
+    event_type = c(
+      "injured_reserve_four_game_minimum", "next_back_opportunity_upgrade",
+      "committee_role_downgrade", "handcuff_competition_adjustment",
+      "primary_handcuff_upgrade", "primary_handcuff_upgrade",
+      "starting_perimeter_role_upgrade", "injury_opening_role_upgrade",
+      "starting_wr2_role_upgrade", "team_target_leader_upside_upgrade",
+      "relative_te_rank_adjustment",
+      rep("confirmed_active_kicker_starter", 4)
+    ),
+    note = c(
+      "Pacheco is expected to miss at least four games on injured reserve; reduce season availability and workload expectation.",
+      "Sep. 5 user depth override: Saylors, not Vaki, backs up Gibbs while Pacheco is out; transfer the prior temporary contingent-opportunity allowance rather than duplicating it.",
+      "Reduce Tracy for the Najee Harris signing and performance-driven uncertainty, without treating Harris as the clear handcuff.",
+      "Give Harris only a modest contingent-role increase because the handcuff competition with Tracy remains unresolved.",
+      "Davis is Dallas' immediate handcuff to Javonte Williams and should sit ahead of lower-priority backup backs.",
+      "Allen is the Jets RB2 and should rank ahead of players who are third on their depth charts.",
+      "Golden is expected to start on the perimeter opposite Christian Watson; increase routes and target opportunity.",
+      "Hurst has a larger pathway to snaps and targets because of Jalen McMillan's injuries and injury history.",
+      "Fields is the approved Giants No. 2 receiver; increase his role without forcing a top-60 projection.",
+      "Kraft has a plausible path to lead Green Bay in targets and should sit slightly ahead of Kittle.",
+      "Keep Kittle close to Kraft while preserving the previously approved availability risk.",
+      "Zvada is the confirmed Giants starting kicker.",
+      "Gay is the confirmed Raiders starting kicker.",
+      "Stevens is the confirmed Commanders starting kicker.",
+      "Patterson is the confirmed Dolphins starting kicker."
+    ),
+    stringsAsFactors = FALSE
+  ) |>
+    dplyr::mutate(player_key = make_player_key(.data$player), required_match = TRUE)
+
+  out <- board
+  if (!"context_adjustment_count" %in% names(out)) out$context_adjustment_count <- 0L
+  if (!"manual_context_note" %in% names(out)) out$manual_context_note <- ""
+  if (!"manual_team_override" %in% names(out)) out$manual_team_override <- ""
+  out$sep2_post_cuts_context_applied <- FALSE
+  out$sep2_post_cuts_context_type <- ""
+  out$sep2_post_cuts_p50_before <- NA_real_
+  out$sep2_post_cuts_p50_after <- NA_real_
+  out$sep2_post_cuts_context_note <- ""
+
+  for (i in seq_len(nrow(context))) {
+    rows <- which(out$position == context$position[[i]] & out$player_key == context$player_key[[i]])
+    if (length(rows) == 0L) next
+    before_games <- sos_prob_num(out$adjusted_projected_games[rows])
+    before_ppg <- sos_prob_num(out$adjusted_projected_ppg[rows])
+    before_p50 <- sos_prob_num(out$adjusted_p50_points[rows])
+    after_games <- before_games
+    if (is.finite(context$games_floor[[i]])) after_games <- pmax(after_games, context$games_floor[[i]])
+    if (is.finite(context$games_cap[[i]])) after_games <- pmin(after_games, context$games_cap[[i]])
+    after_ppg <- pmax(0, before_ppg * context$ppg_multiplier[[i]])
+    if (is.finite(context$ppg_floor[[i]])) after_ppg <- pmax(after_ppg, context$ppg_floor[[i]])
+    after_p50 <- after_games * after_ppg
+    total_multiplier <- ifelse(before_p50 > 1e-8, after_p50 / before_p50, ifelse(after_p50 <= 1e-8, 0, 1))
+    if (nzchar(context$team_override[[i]])) {
+      out$current_team[rows] <- context$team_override[[i]]
+      out$next_team[rows] <- context$team_override[[i]]
+      out$manual_team_override[rows] <- context$team_override[[i]]
+    }
+    out$adjusted_projected_games[rows] <- after_games
+    out$adjusted_projected_ppg[rows] <- after_ppg
+    for (column in intersect(
+      c("adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points", "adjusted_p75_points", "adjusted_p90_points"),
+      names(out)
+    )) {
+      out[[column]][rows] <- pmax(0, sos_prob_num(out[[column]][rows]) * total_multiplier)
+    }
+    out$sep2_post_cuts_context_applied[rows] <- TRUE
+    out$sep2_post_cuts_context_type[rows] <- context$event_type[[i]]
+    out$sep2_post_cuts_p50_before[rows] <- before_p50
+    out$sep2_post_cuts_p50_after[rows] <- after_p50
+    out$sep2_post_cuts_context_note[rows] <- context$note[[i]]
+    out$context_adjustment_count[rows] <- dplyr::coalesce(sos_prob_num(out$context_adjustment_count[rows]), 0) + 1L
+    existing_note <- dplyr::coalesce(as.character(out$manual_context_note[rows]), "")
+    out$manual_context_note[rows] <- ifelse(
+      nzchar(existing_note), paste(existing_note, context$note[[i]], sep = " | "), context$note[[i]]
+    )
+  }
+
+  protected_status <- grepl(
+    "injured reserve|out for the season|season-ending|pup|suspend|commissioner exempt",
+    tolower(dplyr::coalesce(as.character(out$manual_context_note), "")),
+    perl = TRUE
+  )
+  no_final_depth_match <- out$position %in% c("QB", "RB", "WR", "TE", "K") &
+    dplyr::coalesce(as.character(out$roster_context_source), "") == "prior_season_team"
+  free_agent_rows <- no_final_depth_match & !protected_status
+  if (any(free_agent_rows)) {
+    before_p50 <- sos_prob_num(out$adjusted_p50_points[free_agent_rows])
+    out$current_team[free_agent_rows] <- "FA"
+    out$next_team[free_agent_rows] <- "FA"
+    out$adjusted_projected_games[free_agent_rows] <- 0
+    out$adjusted_projected_ppg[free_agent_rows] <- 0
+    for (column in intersect(
+      c("adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points", "adjusted_p75_points", "adjusted_p90_points"),
+      names(out)
+    )) out[[column]][free_agent_rows] <- 0
+    fa_note <- "Not listed on the approved final Week 1 depth chart after roster cuts; treat as a free agent and place at the bottom until signed."
+    out$sep2_post_cuts_context_applied[free_agent_rows] <- TRUE
+    out$sep2_post_cuts_context_type[free_agent_rows] <- "free_agent_after_final_cuts"
+    out$sep2_post_cuts_p50_before[free_agent_rows] <- before_p50
+    out$sep2_post_cuts_p50_after[free_agent_rows] <- 0
+    out$sep2_post_cuts_context_note[free_agent_rows] <- fa_note
+    out$context_adjustment_count[free_agent_rows] <-
+      dplyr::coalesce(sos_prob_num(out$context_adjustment_count[free_agent_rows]), 0) + 1L
+    existing_note <- dplyr::coalesce(as.character(out$manual_context_note[free_agent_rows]), "")
+    out$manual_context_note[free_agent_rows] <- ifelse(
+      nzchar(existing_note), paste(existing_note, fa_note, sep = " | "), fa_note
+    )
+  }
+
+  out <- sos_enforce_projection_ranges(
+    out,
+    c("adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points", "adjusted_p75_points", "adjusted_p90_points")
+  ) |>
+    dplyr::mutate(
+      adjusted_average_range_score = (
+        .data$adjusted_p25_points + .data$adjusted_p50_points + .data$adjusted_p75_points
+      ) / 3
+    ) |>
+    dplyr::group_by(.data$position) |>
+    dplyr::mutate(
+      manual_adjusted_projection_rank = rank(-.data$adjusted_average_range_score, ties.method = "first", na.last = "keep")
+    ) |>
+    dplyr::ungroup()
+
+  audit <- out |>
+    dplyr::filter(.data$sep2_post_cuts_context_applied) |>
+    dplyr::transmute(
+      position = .data$position,
+      prediction_season = as.integer(prediction_season),
+      player = .data$player,
+      current_team = .data$current_team,
+      event_type = .data$sep2_post_cuts_context_type,
+      p50_before = .data$sep2_post_cuts_p50_before,
+      p50_after = .data$sep2_post_cuts_p50_after,
+      status = dplyr::if_else(is.finite(.data$p50_after) & .data$p50_after >= 0, "PASS", "FAIL")
+    ) |>
+    dplyr::arrange(.data$position, .data$player)
+  missing_required <- dplyr::anti_join(
+    dplyr::filter(context, .data$required_match),
+    dplyr::distinct(out, .data$position, .data$player_key),
+    by = c("position", "player_key")
+  )
+  if (nrow(missing_required) > 0L || any(audit$status != "PASS")) {
+    stop(
+      "Sep. 2 SOS post-cuts context audit failed. Missing required rows: ", nrow(missing_required),
+      if (nrow(missing_required) > 0L) paste0(
+        " [", paste(paste(missing_required$position, missing_required$player), collapse = "; "), "]"
+      ) else "",
+      "; failed rows: ", sum(audit$status != "PASS"), ".",
+      call. = FALSE
+    )
+  }
+  list(board = out, audit = audit, context = context)
+}
+
+sos_read_researched_roster_context <- function(prediction_season, week, depth_dir) {
+  empty <- data.frame(player_key = character(), researched_team = character(),
+    researched_status = character(), researched_depth = integer(), researched_depth_override = logical(),
+    researched_source_url = character(), researched_as_of = character())
+  path <- file.path(depth_dir, sprintf("nfl_context_roster_%s_wk%s.csv",
+    substr(as.character(prediction_season), 3, 4), week))
+  if (!file.exists(path)) return(empty)
+  raw <- utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+  required <- c("Name", "SEA", "WK", "TM", "roster_status", "source_url", "source_timestamp", "depth_team", "depth_override")
+  if (!all(required %in% names(raw))) stop("Researched roster context schema mismatch: ", path, call. = FALSE)
+  raw <- raw[raw$SEA == prediction_season & raw$WK == week, , drop = FALSE]
+  out <- data.frame(player_key = make_player_key(raw$Name),
+    researched_team = normalize_team_abbr(raw$TM), researched_status = raw$roster_status,
+    researched_depth = suppressWarnings(as.integer(raw$depth_team)), researched_depth_override = as.logical(raw$depth_override),
+    researched_source_url = raw$source_url, researched_as_of = raw$source_timestamp)
+  if (anyDuplicated(out$player_key) || anyNA(out$player_key) || any(!nzchar(out$player_key)) ||
+      any(!out$researched_team %in% sos_nfl_team_name_lookup()$team) ||
+      anyNA(out$researched_source_url) || any(!grepl("^https://", out$researched_source_url)) ||
+      anyNA(out$researched_as_of) || any(!nzchar(out$researched_as_of))) {
+    stop("Researched roster context failed identity/provenance validation.", call. = FALSE)
+  }
+  out
+}
+
+sos_build_authoritative_2026_team_lookup <- function(
+    prediction_season = 2026L,
+    week = 1L,
+    depth_dir = sos_2026_depth_chart_dir()
+) {
+  prediction_season <- as.integer(prediction_season[[1]])
+  week <- as.integer(week[[1]])
+  if (prediction_season != 2026L) return(data.frame())
+
+  approved_path <- file.path(
+    depth_dir,
+    sprintf("nflverse_depth_chart_%s_wk%s.csv", substr(as.character(prediction_season), 3, 4), week)
+  )
+  approved <- if (file.exists(approved_path)) {
+    sos_read_approved_week_depth_chart(approved_path, prediction_season, week)
+  } else {
+    sos_read_2026_depth_chart_week(prediction_season, week, write_output = FALSE)
+  }
+  approved_lookup <- approved |>
+    dplyr::filter(nzchar(.data$player_key), nzchar(.data$team)) |>
+    dplyr::group_by(.data$player_key) |>
+    dplyr::filter(dplyr::n_distinct(.data$team) == 1L) |>
+    dplyr::arrange(.data$depth_team, .by_group = TRUE) |>
+    dplyr::slice(1L) |>
+    dplyr::ungroup() |>
+    dplyr::transmute(
+      player_key = .data$player_key,
+      approved_team = .data$team,
+      approved_position = .data$position,
+      approved_depth = .data$depth_team,
+      approved_source = .data$roster_source
+    )
+
+  raw_path <- file.path(depth_dir, paste0("nflverse_depth_charts_", prediction_season, ".csv"))
+  raw <- if (file.exists(raw_path)) sos_read_latest_nflverse_snapshot(raw_path) else NULL
+  raw_lookup <- if (is.null(raw) || nrow(raw) == 0L) {
+    data.frame(
+      player_key = character(), raw_team = character(), raw_position = character(),
+      raw_depth = integer(), raw_source = character(), stringsAsFactors = FALSE
+    )
+  } else {
+    raw |>
+      dplyr::transmute(
+        player_key = make_player_key(.data$player_name),
+        raw_team = normalize_team_abbr(as.character(.data$team)),
+        raw_position = toupper(as.character(.data$pos_abb)),
+        raw_depth = suppressWarnings(as.integer(.data$pos_rank)),
+        raw_source = "nflverse_latest_full_snapshot"
+      ) |>
+      dplyr::filter(nzchar(.data$player_key), nzchar(.data$raw_team)) |>
+      dplyr::group_by(.data$player_key) |>
+      dplyr::filter(dplyr::n_distinct(.data$raw_team) == 1L) |>
+      dplyr::arrange(is.na(.data$raw_depth), .data$raw_depth, .by_group = TRUE) |>
+      dplyr::slice(1L) |>
+      dplyr::ungroup()
+  }
+
+  researched <- sos_read_researched_roster_context(prediction_season, week, depth_dir)
+  dplyr::full_join(approved_lookup, raw_lookup, by = "player_key") |>
+    dplyr::mutate(
+      resolved_team = dplyr::coalesce(.data$approved_team, .data$raw_team),
+      resolved_position = dplyr::coalesce(.data$approved_position, .data$raw_position),
+      resolved_depth = dplyr::coalesce(.data$approved_depth, .data$raw_depth),
+      resolved_source = dplyr::coalesce(.data$approved_source, .data$raw_source)
+    ) |>
+    dplyr::full_join(researched, by = "player_key") |>
+    dplyr::mutate(
+      resolved_depth = dplyr::case_when(
+        .data$researched_depth_override %in% TRUE ~ .data$researched_depth,
+        !is.na(.data$researched_team) & (is.na(.data$resolved_team) | .data$researched_team != .data$resolved_team) ~ NA_integer_,
+        TRUE ~ .data$resolved_depth
+      ),
+      resolved_team = dplyr::coalesce(.data$researched_team, .data$resolved_team),
+      resolved_source = dplyr::if_else(!is.na(.data$researched_team), "official_transaction_depth_override", .data$resolved_source)
+    ) |>
+    dplyr::select(
+      "player_key", "resolved_team", "resolved_position", "resolved_depth",
+      "resolved_source", "approved_team", "raw_team", "researched_status",
+      "researched_source_url", "researched_as_of"
+    )
+}
+
+sos_reconcile_authoritative_2026_depth_teams <- function(
+    board,
+    baseline_board = NULL,
+    prediction_season = 2026L,
+    week = 1L
+) {
+  if (is.null(board) || nrow(board) == 0L || as.integer(prediction_season[[1]]) != 2026L) {
+    return(list(board = board, audit = data.frame(), summary = data.frame(), lookup = data.frame()))
+  }
+
+  lookup <- sos_build_authoritative_2026_team_lookup(prediction_season, week)
+  out <- board
+  lookup_row <- match(out$player_key, lookup$player_key)
+  matched <- !is.na(lookup_row)
+  resolved_team <- rep(NA_character_, nrow(out))
+  resolved_position <- rep(NA_character_, nrow(out))
+  resolved_depth <- rep(NA_integer_, nrow(out))
+  resolved_source <- rep(NA_character_, nrow(out))
+  resolved_team[matched] <- lookup$resolved_team[lookup_row[matched]]
+  resolved_position[matched] <- lookup$resolved_position[lookup_row[matched]]
+  resolved_depth[matched] <- lookup$resolved_depth[lookup_row[matched]]
+  resolved_source[matched] <- lookup$resolved_source[lookup_row[matched]]
+  matched <- matched & !is.na(resolved_team) & nzchar(resolved_team)
+
+  team_before <- if ("current_team" %in% names(out)) {
+    normalize_team_abbr(as.character(out$current_team))
+  } else if ("team" %in% names(out)) {
+    normalize_team_abbr(as.character(out$team))
+  } else {
+    rep(NA_character_, nrow(out))
+  }
+  team_changed <- matched & (is.na(team_before) | team_before != resolved_team)
+
+  out$authoritative_depth_team_reconciled <- matched
+  out$authoritative_depth_team_changed <- team_changed
+  out$authoritative_depth_team_before <- team_before
+  out$authoritative_depth_team_after <- dplyr::if_else(matched, resolved_team, team_before)
+  out$authoritative_depth_team_source <- dplyr::if_else(matched, resolved_source, "unmatched")
+  out$authoritative_depth_position <- dplyr::if_else(matched, resolved_position, NA_character_)
+  out$authoritative_depth_rank <- dplyr::if_else(matched, resolved_depth, NA_integer_)
+  out$authoritative_depth_projection_restored <- FALSE
+  out$researched_roster_status <- lookup$researched_status[lookup_row]
+  out$researched_roster_source_url <- lookup$researched_source_url[lookup_row]
+  out$researched_roster_as_of <- lookup$researched_as_of[lookup_row]
+  # Eligibility metadata is not a season-long absence or a Week 1 active declaration.
+  out$week1_active_roster_eligible <- dplyr::case_when(
+    out$researched_roster_status == "active" ~ TRUE,
+    !is.na(out$researched_roster_status) ~ FALSE,
+    TRUE ~ NA
+  )
+
+  for (column in intersect(
+    c("current_team", "next_team", "team", "manual_team_override", "depth_chart_team_2026"),
+    names(out)
+  )) {
+    out[[column]][matched] <- resolved_team[matched]
+  }
+  if ("depth_team_2026" %in% names(out)) {
+    compatible_position <- dplyr::case_when(
+      resolved_position == "FB" ~ "RB",
+      resolved_position %in% c("PR", "KR") ~ "WR",
+      resolved_position == "PK" ~ "K",
+      TRUE ~ resolved_position
+    )
+    depth_rows <- matched & compatible_position == out$position & is.finite(resolved_depth)
+    out$depth_team_2026[depth_rows] <- resolved_depth[depth_rows]
+    unknown_order <- matched & is.na(resolved_depth) & !is.na(out$researched_roster_status)
+    out$depth_team_2026[unknown_order] <- NA_integer_
+  }
+  if ("roster_context_source" %in% names(out)) {
+    out$roster_context_source[matched] <- resolved_source[matched]
+  }
+
+  stale_status <- rep(FALSE, nrow(out))
+  stale_columns <- list(
+    nfl_context_brief_event_type = c("unsigned_inactive", "waived_injured_inactive"),
+    aug31_context_delta_type = c("waived_inactive", "released_kicker_inactive"),
+    sep1_depth_context_type = c(
+      "practice_squad_inactive", "not_on_depth_chart_inactive",
+      "waived_inactive", "released_inactive"
+    ),
+    sep2_post_cuts_context_type = "free_agent_after_final_cuts"
+  )
+  for (column in names(stale_columns)) {
+    if (!column %in% names(out)) next
+    # Roster membership corrects identity, but only verified active status can
+    # retire an inactivity gate; PS/reserve membership is not an activation.
+    superseded <- matched & out$researched_roster_status %in% "active" &
+      as.character(out[[column]]) %in% stale_columns[[column]]
+    stale_status <- stale_status | superseded
+    out[[column]][superseded] <- "superseded_by_authoritative_depth"
+  }
+
+  if (!is.null(baseline_board) && nrow(baseline_board) > 0L) {
+    baseline_key <- paste(baseline_board$position, baseline_board$player_key, sep = "|")
+    baseline_row <- match(paste(out$position, out$player_key, sep = "|"), baseline_key)
+    current_games <- if ("adjusted_projected_games" %in% names(out)) {
+      sos_prob_num(out$adjusted_projected_games)
+    } else rep(NA_real_, nrow(out))
+    current_p50 <- if ("adjusted_p50_points" %in% names(out)) {
+      sos_prob_num(out$adjusted_p50_points)
+    } else rep(NA_real_, nrow(out))
+    restore_rows <- matched & stale_status & !is.na(baseline_row) &
+      ((is.finite(current_games) & current_games <= 0.5) | (is.finite(current_p50) & current_p50 <= 0.5))
+    restore_columns <- intersect(
+      c(
+        "adjusted_projected_games", "adjusted_projected_ppg",
+        "adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points",
+        "adjusted_p75_points", "adjusted_p90_points", "adjusted_average_range_score",
+        "manual_adjusted_projection_rank"
+      ),
+      intersect(names(out), names(baseline_board))
+    )
+    for (column in restore_columns) {
+      out[[column]][restore_rows] <- baseline_board[[column]][baseline_row[restore_rows]]
+    }
+    out$authoritative_depth_projection_restored[restore_rows] <- TRUE
+    if ("active_projection_pool" %in% names(out)) out$active_projection_pool[restore_rows] <- TRUE
+    if ("eligibility_reason" %in% names(out)) {
+      out$eligibility_reason[restore_rows] <- "reactivated_by_authoritative_2026_depth"
+    }
+  }
+
+  if ("manual_context_note" %in% names(out) && any(team_changed)) {
+    reconciliation_note <- paste0(
+      "Authoritative 2026 nflverse depth reconciliation: ",
+      dplyr::coalesce(team_before, "unknown"), " to ", resolved_team, "."
+    )
+    existing_note <- dplyr::coalesce(as.character(out$manual_context_note), "")
+    out$manual_context_note[team_changed] <- ifelse(
+      nzchar(existing_note[team_changed]),
+      paste(existing_note[team_changed], reconciliation_note[team_changed], sep = " | "),
+      reconciliation_note[team_changed]
+    )
+  }
+
+  audit <- data.frame(
+    position = out$position,
+    prediction_season = as.integer(prediction_season),
+    player = out$player,
+    player_key = out$player_key,
+    team_before = team_before,
+    authoritative_team = resolved_team,
+    team_after = if ("current_team" %in% names(out)) out$current_team else out$team,
+    authoritative_position = resolved_position,
+    authoritative_depth = resolved_depth,
+    source = resolved_source,
+    team_changed = team_changed,
+    projection_restored = out$authoritative_depth_projection_restored,
+    stringsAsFactors = FALSE
+  ) |>
+    dplyr::filter(.data$player_key %in% lookup$player_key) |>
+    dplyr::mutate(
+      status = dplyr::if_else(
+        normalize_team_abbr(as.character(.data$team_after)) == .data$authoritative_team,
+        "PASS", "FAIL"
+      )
+    ) |>
+    dplyr::arrange(
+      factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")),
+      .data$player
+    )
+  summary <- audit |>
+    dplyr::group_by(.data$position) |>
+    dplyr::summarise(
+      matched_rows = dplyr::n(),
+      corrected_team_rows = sum(.data$team_changed),
+      restored_projection_rows = sum(.data$projection_restored),
+      failed_rows = sum(.data$status != "PASS"),
+      status = dplyr::if_else(.data$failed_rows == 0L, "PASS", "FAIL"),
+      .groups = "drop"
+    )
+  if (nrow(summary) > 0L && any(summary$status != "PASS")) {
+    stop("Authoritative 2026 depth-team reconciliation audit failed.", call. = FALSE)
+  }
+  list(board = out, audit = audit, summary = summary, lookup = lookup)
+}
+
+sos_apply_nfl_context_post_stat_ranges <- function(board) {
+  if (is.null(board) || nrow(board) == 0L) return(board)
+  required <- c(
+    "nfl_context_brief_p10_multiplier", "nfl_context_brief_p25_multiplier",
+    "adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points",
+    "adjusted_p75_points", "adjusted_p90_points"
+  )
+  if (!all(required %in% names(board))) return(board)
+
+  out <- board
+  p10_multiplier <- dplyr::coalesce(
+    sos_prob_num(out$nfl_context_brief_p10_multiplier), 1
+  )
+  p25_multiplier <- dplyr::coalesce(
+    sos_prob_num(out$nfl_context_brief_p25_multiplier), 1
+  )
+  out$adjusted_p10_points <- pmax(
+    0,
+    sos_prob_num(out$adjusted_p10_points) * p10_multiplier
+  )
+  out$adjusted_p25_points <- pmax(
+    0,
+    sos_prob_num(out$adjusted_p25_points) * p25_multiplier
+  )
+  out <- sos_enforce_projection_ranges(
+    out,
+    c(
+      "adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points",
+      "adjusted_p75_points", "adjusted_p90_points"
+    )
+  ) |>
+    dplyr::mutate(
+      adjusted_average_range_score = (
+        .data$adjusted_p25_points + .data$adjusted_p50_points + .data$adjusted_p75_points
+      ) / 3
+    ) |>
+    dplyr::group_by(.data$position) |>
+    dplyr::mutate(
+      manual_adjusted_projection_rank = rank(
+        -.data$adjusted_average_range_score,
+        ties.method = "first",
+        na.last = "keep"
+      )
+    ) |>
+    dplyr::ungroup()
+  out
 }
 
 sos_apply_qb_pass_attempt_sanity <- function(wide) {
@@ -16124,6 +17897,25 @@ sos_apply_qb_final_review_stat_context <- function(wide, prediction_season = 202
     )
     invisible(NULL)
   }
+  apply_team_multiplier <- function(team, column, multiplier, note) {
+    if (!"current_team" %in% names(out) || !column %in% names(out)) return(invisible(NULL))
+    rows <- which(out$position == "QB" & normalize_team_abbr(out$current_team) == team)
+    if (length(rows) == 0L) return(invisible(NULL))
+    before <- sos_prob_num(out[[column]][rows])
+    after <- pmax(0, before * multiplier)
+    changed <- is.finite(after) & is.finite(before) & abs(after - before) > 1e-8
+    if (!any(changed)) return(invisible(NULL))
+    changed_rows <- rows[changed]
+    out[[column]][changed_rows] <<- after[changed]
+    out$qb_final_review_stat_applied[changed_rows] <<- TRUE
+    out$qb_final_review_stat_adjustment_count[changed_rows] <<-
+      out$qb_final_review_stat_adjustment_count[changed_rows] + 1L
+    existing <- out$qb_final_review_stat_note[changed_rows]
+    out$qb_final_review_stat_note[changed_rows] <<- ifelse(
+      nzchar(existing), paste(existing, note, sep = " | "), note
+    )
+    invisible(NULL)
+  }
 
   apply_bound("Drake Maye", "projected_pass_td", 30, "floor", "Passing TD floor reflects the upgraded receiving environment.")
   apply_bound("Drake Maye", "projected_rush_attempts", 90, "floor", "Restore a modest healthy rushing-volume floor.")
@@ -16133,14 +17925,14 @@ sos_apply_qb_final_review_stat_context <- function(wide, prediction_season = 202
   apply_bound("Jalen Hurts", "projected_pass_yards", 3850, "cap", "Keep the passing projection below the prior boosted level.")
   apply_bound("Jalen Hurts", "projected_pass_td", 26, "cap", "Keep passing touchdowns separate from Tush Push value.")
   apply_bound("Jalen Hurts", "projected_rush_td", 8.5, "floor", "Restore Tush Push goal-line touchdown usage.")
-  apply_bound("Joe Burrow", "projected_pass_attempts", 540, "floor", "Healthy 15-game passing-volume floor.")
-  apply_bound("Joe Burrow", "projected_pass_yards", 4300, "floor", "Healthy 15-game passing-yardage floor.")
-  apply_bound("Joe Burrow", "projected_pass_td", 33, "floor", "Healthy 15-game passing-touchdown floor.")
+  apply_bound("Joe Burrow", "projected_pass_attempts", 560, "floor", "Healthy 15-game passing-volume floor.")
+  apply_bound("Joe Burrow", "projected_pass_yards", 4500, "floor", "Healthy 15-game passing-yardage floor.")
+  apply_bound("Joe Burrow", "projected_pass_td", 35, "floor", "Healthy 15-game passing-touchdown floor.")
   apply_bound("Lamar Jackson", "projected_rush_attempts", 95, "floor", "Increase the healthy-season rushing-volume restoration.")
   apply_bound("Lamar Jackson", "projected_rush_yards", 600, "floor", "Increase the healthy-season rushing-yardage restoration.")
-  apply_bound("Patrick Mahomes", "projected_rush_attempts", 50, "cap", "Reduce designed and scramble volume after the ACL injury.")
-  apply_bound("Patrick Mahomes", "projected_rush_yards", 300, "cap", "Cap post-ACL rushing yardage without changing passing volume.")
-  apply_bound("Patrick Mahomes", "projected_rush_td", 3, "cap", "Apply a modest post-ACL rushing-touchdown cap.")
+  apply_bound("Patrick Mahomes", "projected_rush_attempts", 40, "cap", "Reduce designed and scramble volume further after the ACL injury.")
+  apply_bound("Patrick Mahomes", "projected_rush_yards", 225, "cap", "Apply a firmer post-ACL rushing-yardage cap.")
+  apply_bound("Patrick Mahomes", "projected_rush_td", 2, "cap", "Apply a firmer post-ACL rushing-touchdown cap.")
   apply_bound("Jayden Daniels", "projected_pass_td", 22, "floor", "Apply a modest healthy passing-touchdown floor.")
   apply_bound("Jayden Daniels", "projected_rush_attempts", 90, "floor", "Increase healthy-season rushing volume modestly.")
   apply_bound("Jayden Daniels", "projected_rush_yards", 575, "floor", "Increase healthy-season rushing yardage modestly.")
@@ -16153,9 +17945,29 @@ sos_apply_qb_final_review_stat_context <- function(wide, prediction_season = 202
   apply_bound("Kirk Cousins", "projected_pass_attempts", 380, "floor", "Opening-day starter passing-volume floor.")
   apply_bound("Kirk Cousins", "projected_pass_yards", 3200, "floor", "Opening-day starter passing-yardage floor.")
   apply_bound("Kirk Cousins", "projected_pass_td", 20, "floor", "Opening-day starter passing-touchdown floor.")
-  apply_bound("Matthew Stafford", "projected_pass_td", 29, "cap", "Apply additional passing-TD regression after a 40-TD season.")
+  apply_bound("Matthew Stafford", "projected_pass_attempts", 510, "cap", "Apply additional post-40-TD passing-volume regression.")
+  apply_bound("Matthew Stafford", "projected_pass_yards", 3950, "cap", "Apply additional post-40-TD passing-yardage regression.")
+  apply_bound("Matthew Stafford", "projected_pass_td", 24, "cap", "Apply stronger passing-TD regression after a 40-TD season.")
+  apply_bound("Brock Purdy", "projected_pass_td", 29, "floor", "Increase the 15-game starter passing-touchdown floor.")
+  apply_bound("Jayden Daniels", "projected_pass_yards", 3900, "floor", "Support the healthier-season base projection with passing yardage.")
+  apply_bound("Jayden Daniels", "projected_pass_td", 25, "floor", "Support the healthier-season base projection with passing touchdowns.")
+  apply_bound("Jayden Daniels", "projected_rush_td", 3, "floor", "Preserve Daniels' healthy rushing-touchdown contribution.")
+  apply_bound("Michael Penix", "projected_pass_attempts", 480, "floor", "Atlanta starter passing-volume floor.")
+  apply_bound("Michael Penix", "projected_pass_yards", 3800, "floor", "Atlanta starter passing-yardage floor.")
+  apply_bound("Michael Penix", "projected_pass_td", 24, "floor", "Atlanta starter passing-touchdown floor.")
+  apply_bound("Tua Tagovailoa", "projected_pass_attempts", 110, "cap", "Atlanta contingency-quarterback passing-volume cap.")
+  apply_bound("Tua Tagovailoa", "projected_pass_yards", 850, "cap", "Atlanta contingency-quarterback passing-yardage cap.")
+  apply_bound("Tua Tagovailoa", "projected_pass_td", 6, "cap", "Atlanta contingency-quarterback passing-touchdown cap.")
   apply_bound("Malik Willis", "projected_rush_attempts", 75, "floor", "Starting mobile-QB rushing-volume floor.")
   apply_bound("Malik Willis", "projected_rush_yards", 425, "floor", "Starting mobile-QB rushing-yardage floor.")
+  apply_team_multiplier(
+    "WAS", "projected_pass_yards", 0.99,
+    "Apply a small season-weighted pass-efficiency reduction for the opening-month Laremy Tunsil IR absence."
+  )
+  apply_team_multiplier(
+    "WAS", "projected_pass_td", 0.99,
+    "Apply a small season-weighted passing-TD reduction for the opening-month Laremy Tunsil IR absence."
+  )
   out
 }
 
@@ -16243,6 +18055,9 @@ sos_apply_rb_final_review_stat_context <- function(wide, prediction_season = 202
   apply_bound("Jadarian Price", "projected_receptions", 28, "cap", "Cap receptions behind George Holani early.")
   apply_bound("Jadarian Price", "projected_receiving_yards", 200, "cap", "Cap receiving yardage behind George Holani early.")
 
+  apply_bound("Jahmyr Gibbs", "projected_rush_yards", 1240, "floor", "Support the RB1 projection with a modest rushing-yardage floor.")
+  apply_bound("Jahmyr Gibbs", "projected_receiving_yards", 590, "floor", "Support the RB1 projection with a modest receiving-yardage floor.")
+
   apply_bound("Chuba Hubbard", "projected_rush_attempts", 200, "floor", "Keep a bounded starter rushing floor despite the hamstring injury.")
   apply_bound("Chuba Hubbard", "projected_rush_attempts", 230, "cap", "Cap rushing work for the hamstring injury and Brooks' rising role.")
   apply_bound("Chuba Hubbard", "projected_rush_yards", 825, "floor", "Keep a bounded starter rushing-yardage floor.")
@@ -16277,9 +18092,9 @@ sos_apply_rb_final_review_stat_context <- function(wide, prediction_season = 202
   apply_bound("Bhayshul Tuten", "projected_receptions", 34, "floor", "Lead-back reception floor.")
   apply_bound("Bhayshul Tuten", "projected_receiving_yards", 285, "floor", "Lead-back receiving-yardage floor.")
 
-  apply_bound("Blake Corum", "projected_rush_attempts", 200, "floor", "Drive-split rushing-volume floor.")
-  apply_bound("Blake Corum", "projected_rush_yards", 900, "floor", "Drive-split rushing-yardage floor.")
-  apply_bound("Blake Corum", "projected_rush_td", 6, "floor", "Preserve Kyren's inside-five edge while raising Corum.")
+  apply_bound("Blake Corum", "projected_rush_attempts", 215, "floor", "Top-handcuff and drive-split rushing-volume floor.")
+  apply_bound("Blake Corum", "projected_rush_yards", 950, "floor", "Top-handcuff and drive-split rushing-yardage floor.")
+  apply_bound("Blake Corum", "projected_rush_td", 7, "floor", "Increase touchdown opportunity while preserving Kyren's inside-five edge.")
   apply_bound("Blake Corum", "projected_targets", 20, "floor", "Modest receiving-opportunity floor.")
   apply_bound("Blake Corum", "projected_receptions", 15, "floor", "Modest reception floor.")
   apply_bound("Blake Corum", "projected_receiving_yards", 120, "floor", "Modest receiving-yardage floor.")
@@ -16299,19 +18114,188 @@ sos_apply_rb_final_review_stat_context <- function(wide, prediction_season = 202
   apply_bound("Isaac Guerendo", "projected_receiving_yards", 20, "cap", "Fringe-roster receiving-yardage cap.")
   apply_bound("Isaac Guerendo", "projected_receiving_td", 0.2, "cap", "Fringe-roster receiving-touchdown cap.")
 
-  apply_bound("Jaydon Blue", "projected_rush_attempts", 80, "floor", "Backup rushing-opportunity floor.")
-  apply_bound("Jaydon Blue", "projected_rush_yards", 350, "floor", "Backup rushing-yardage floor.")
-  apply_bound("Jaydon Blue", "projected_rush_td", 2.5, "floor", "Backup touchdown-opportunity floor.")
-  apply_bound("Jaydon Blue", "projected_targets", 15, "floor", "Backup target floor.")
-  apply_bound("Jaydon Blue", "projected_receptions", 10, "floor", "Backup reception floor.")
-  apply_bound("Jaydon Blue", "projected_receiving_yards", 80, "floor", "Backup receiving-yardage floor.")
+  apply_bound("Jaydon Blue", "projected_rush_attempts", 60, "cap", "Third-string rushing-opportunity cap behind Malik Davis.")
+  apply_bound("Jaydon Blue", "projected_rush_yards", 260, "cap", "Third-string rushing-yardage cap behind Malik Davis.")
+  apply_bound("Jaydon Blue", "projected_rush_td", 2, "cap", "Third-string touchdown cap behind Malik Davis.")
+  apply_bound("Jaydon Blue", "projected_targets", 12, "cap", "Third-string target cap behind Malik Davis.")
+  apply_bound("Jaydon Blue", "projected_receptions", 8, "cap", "Third-string reception cap behind Malik Davis.")
+  apply_bound("Jaydon Blue", "projected_receiving_yards", 65, "cap", "Third-string receiving-yardage cap behind Malik Davis.")
+
+  apply_bound("Malik Davis", "projected_rush_attempts", 85, "floor", "Dallas primary-handcuff rushing floor.")
+  apply_bound("Malik Davis", "projected_rush_yards", 375, "floor", "Dallas primary-handcuff rushing-yardage floor.")
+  apply_bound("Malik Davis", "projected_rush_td", 3, "floor", "Dallas primary-handcuff touchdown floor.")
+  apply_bound("Malik Davis", "projected_targets", 18, "floor", "Dallas primary-handcuff target floor.")
+  apply_bound("Malik Davis", "projected_receptions", 13, "floor", "Dallas primary-handcuff reception floor.")
+  apply_bound("Malik Davis", "projected_receiving_yards", 100, "floor", "Dallas primary-handcuff receiving-yardage floor.")
+
+  apply_bound("Ray Davis", "projected_rush_attempts", 100, "floor", "Buffalo primary-handcuff rushing floor.")
+  apply_bound("Ray Davis", "projected_rush_yards", 450, "floor", "Buffalo primary-handcuff rushing-yardage floor.")
+  apply_bound("Ray Davis", "projected_rush_td", 3, "floor", "Buffalo primary-handcuff rushing-touchdown floor.")
+  apply_bound("Ray Davis", "projected_targets", 20, "floor", "Buffalo primary-handcuff target floor.")
+  apply_bound("Ray Davis", "projected_receptions", 15, "floor", "Buffalo primary-handcuff reception floor.")
+  apply_bound("Ray Davis", "projected_receiving_yards", 100, "floor", "Buffalo primary-handcuff receiving-yardage floor.")
+
+  apply_bound("Ty Johnson", "projected_rush_attempts", 40, "cap", "Move Johnson behind Ray Davis in Buffalo's backup order.")
+  apply_bound("Ty Johnson", "projected_rush_yards", 175, "cap", "Reduce Johnson's contingent rushing yardage.")
+  apply_bound("Ty Johnson", "projected_targets", 18, "cap", "Reduce Johnson's contingent target share.")
+  apply_bound("Ty Johnson", "projected_receptions", 14, "cap", "Reduce Johnson's contingent receptions.")
+  apply_bound("Ty Johnson", "projected_receiving_yards", 130, "cap", "Reduce Johnson's contingent receiving yardage.")
+
+  apply_bound("Brian Robinson", "projected_rush_attempts", 125, "floor", "Atlanta primary-handcuff rushing floor.")
+  apply_bound("Brian Robinson", "projected_rush_yards", 550, "floor", "Atlanta primary-handcuff rushing-yardage floor.")
+  apply_bound("Brian Robinson", "projected_rush_td", 4, "floor", "Atlanta primary-handcuff rushing-touchdown floor.")
+  apply_bound("Brian Robinson", "projected_targets", 20, "floor", "Atlanta primary-handcuff target floor.")
+  apply_bound("Brian Robinson", "projected_receptions", 15, "floor", "Atlanta primary-handcuff reception floor.")
+  apply_bound("Brian Robinson", "projected_receiving_yards", 100, "floor", "Atlanta primary-handcuff receiving-yardage floor.")
 
   apply_bound("George Holani", "projected_rush_attempts", 40, "floor", "Early-season complementary rushing floor.")
   apply_bound("George Holani", "projected_rush_yards", 180, "floor", "Early-season complementary rushing-yardage floor.")
-  apply_bound("George Holani", "projected_targets", 35, "floor", "Six-week primary receiving-back target floor.")
-  apply_bound("George Holani", "projected_receptions", 28, "floor", "Six-week primary receiving-back reception floor.")
-  apply_bound("George Holani", "projected_receiving_yards", 220, "floor", "Six-week primary receiving-back yardage floor.")
+  apply_bound("George Holani", "projected_targets", 25, "floor", "Early-season receiving-back target floor.")
+  apply_bound("George Holani", "projected_receptions", 18, "floor", "Early-season receiving-back reception floor.")
+  apply_bound("George Holani", "projected_receiving_yards", 140, "floor", "Early-season receiving-back yardage floor.")
   apply_bound("George Holani", "projected_receiving_td", 1, "floor", "Six-week primary receiving-back touchdown floor.")
+
+  apply_bound("De'Von Achane", "projected_rush_attempts", 210, "floor", "Restore a small amount of expected lead-back volume.")
+  apply_bound("De'Von Achane", "projected_rush_yards", 1025, "floor", "Restore a bounded lead-back rushing-yardage floor.")
+  apply_bound("De'Von Achane", "projected_targets", 55, "floor", "Restore a small amount of receiving opportunity without removing passer risk.")
+  apply_bound("De'Von Achane", "projected_receptions", 43, "floor", "Restore a bounded reception floor.")
+  apply_bound("De'Von Achane", "projected_receiving_yards", 300, "floor", "Restore a bounded receiving-yardage floor.")
+
+  apply_bound("D'Andre Swift", "projected_rush_attempts", 215, "floor", "Temporary Monangai injury creates a modest rushing-volume floor.")
+  apply_bound("D'Andre Swift", "projected_rush_yards", 1000, "floor", "Temporary Monangai injury creates a modest rushing-yardage floor.")
+  apply_bound("D'Andre Swift", "projected_targets", 45, "floor", "Preserve Swift's passing-game role during the early workload increase.")
+
+  apply_bound("Bhayshul Tuten", "projected_rush_attempts", 225, "cap", "Trim the prior aggressive carry floor for Rodriguez's complementary role.")
+  apply_bound("Bhayshul Tuten", "projected_rush_yards", 1025, "cap", "Trim rushing yardage slightly for the expected committee share.")
+  apply_bound("Bhayshul Tuten", "projected_rush_td", 7.5, "cap", "Retain lead-back scoring upside with a modest Rodriguez adjustment.")
+  apply_bound("Bhayshul Tuten", "projected_targets", 40, "cap", "Trim targets slightly for the complementary backfield roles.")
+  apply_bound("Bhayshul Tuten", "projected_receptions", 30, "cap", "Trim receptions slightly for the complementary backfield roles.")
+  apply_bound("Bhayshul Tuten", "projected_receiving_yards", 250, "cap", "Trim receiving yardage slightly for the complementary backfield roles.")
+
+  apply_bound("Chris Rodriguez", "projected_rush_attempts", 120, "floor", "Meaningful complementary and goal-line role rushing floor.")
+  apply_bound("Chris Rodriguez", "projected_rush_yards", 500, "floor", "Meaningful complementary role rushing-yardage floor.")
+  apply_bound("Chris Rodriguez", "projected_rush_td", 4, "floor", "Preserve Rodriguez's goal-line path.")
+  apply_bound("Chris Rodriguez", "projected_targets", 12, "floor", "Modest complementary target floor.")
+
+  apply_bound("Travis Etienne", "projected_rush_attempts", 220, "floor", "Kamara's injury creates a small additional rushing-volume floor.")
+  apply_bound("Travis Etienne", "projected_rush_yards", 950, "floor", "Kamara's injury creates a small additional rushing-yardage floor.")
+  apply_bound("Travis Etienne", "projected_targets", 44, "floor", "Kamara's injury creates a modest receiving-opportunity floor.")
+  apply_bound("Travis Etienne", "projected_receptions", 34, "floor", "Kamara's injury creates a modest reception floor.")
+
+  apply_bound("Alvin Kamara", "projected_rush_attempts", 80, "cap", "Multi-week absence rushing-volume cap.")
+  apply_bound("Alvin Kamara", "projected_rush_yards", 320, "cap", "Multi-week absence rushing-yardage cap.")
+  apply_bound("Alvin Kamara", "projected_targets", 20, "cap", "Multi-week absence target cap.")
+  apply_bound("Alvin Kamara", "projected_receptions", 16, "cap", "Multi-week absence reception cap.")
+
+  apply_bound("Kimani Vidal", "projected_rush_attempts", 75, "cap", "Chargers third-string carry cap.")
+  apply_bound("Kimani Vidal", "projected_rush_yards", 330, "cap", "Chargers third-string rushing-yardage cap.")
+  apply_bound("Kimani Vidal", "projected_targets", 20, "cap", "Chargers third-string target cap.")
+  apply_bound("Kimani Vidal", "projected_receptions", 15, "cap", "Chargers third-string reception cap.")
+  apply_bound("Kimani Vidal", "projected_receiving_yards", 110, "cap", "Chargers third-string receiving-yardage cap.")
+
+  apply_bound("LeQuint Allen", "projected_targets", 22, "floor", "Obvious-passing-down target floor.")
+  apply_bound("LeQuint Allen", "projected_receptions", 16, "floor", "Obvious-passing-down reception floor.")
+  apply_bound("LeQuint Allen", "projected_receiving_yards", 130, "floor", "Obvious-passing-down receiving-yardage floor.")
+
+  apply_bound("Kendre Miller", "projected_rush_attempts", 90, "floor", "New Orleans primary-handcuff rushing floor.")
+  apply_bound("Kendre Miller", "projected_rush_yards", 400, "floor", "New Orleans primary-handcuff rushing-yardage floor.")
+  apply_bound("Kendre Miller", "projected_rush_td", 3, "floor", "New Orleans primary-handcuff touchdown floor.")
+  apply_bound("Kendre Miller", "projected_targets", 20, "floor", "New Orleans primary-handcuff target floor.")
+  apply_bound("Kendre Miller", "projected_receptions", 15, "floor", "New Orleans primary-handcuff reception floor.")
+  apply_bound("Kendre Miller", "projected_receiving_yards", 110, "floor", "New Orleans primary-handcuff receiving-yardage floor.")
+
+  apply_bound("Devin Neal", "projected_rush_attempts", 70, "cap", "Depth-role carry cap behind Kendre Miller.")
+  apply_bound("Devin Neal", "projected_rush_yards", 300, "cap", "Depth-role rushing-yardage cap behind Kendre Miller.")
+  apply_bound("Devin Neal", "projected_targets", 18, "cap", "Depth-role target cap behind Kendre Miller.")
+  apply_bound("Devin Neal", "projected_receptions", 13, "cap", "Depth-role reception cap behind Kendre Miller.")
+  apply_bound("Devin Neal", "projected_receiving_yards", 90, "cap", "Depth-role receiving-yardage cap behind Kendre Miller.")
+
+  apply_bound("James Conner", "projected_rush_attempts", 85, "cap", "Third-string Arizona role carry cap when Love is healthy.")
+  apply_bound("James Conner", "projected_rush_yards", 350, "cap", "Third-string Arizona role rushing-yardage cap.")
+  apply_bound("James Conner", "projected_targets", 20, "cap", "Third-string Arizona role target cap.")
+  apply_bound("Nicholas Singleton", "projected_rush_attempts", 55, "cap", "Opening third-string role carry cap.")
+  apply_bound("Nicholas Singleton", "projected_rush_yards", 240, "cap", "Opening third-string role rushing-yardage cap.")
+  apply_bound("Nicholas Singleton", "projected_targets", 25, "cap", "Opening third-string role target cap.")
+  apply_bound("Kaytron Allen", "projected_rush_attempts", 55, "cap", "Opening third-string role carry cap.")
+  apply_bound("Kaytron Allen", "projected_rush_yards", 240, "cap", "Opening third-string role rushing-yardage cap.")
+  apply_bound("Kaytron Allen", "projected_targets", 25, "cap", "Opening third-string role target cap.")
+
+  apply_bound("Kaelon Black", "projected_rush_attempts", 75, "floor", "Primary McCaffrey handcuff rushing-volume floor.")
+  apply_bound("Kaelon Black", "projected_rush_yards", 325, "floor", "Primary McCaffrey handcuff rushing-yardage floor.")
+  apply_bound("Kaelon Black", "projected_targets", 30, "floor", "Primary McCaffrey handcuff target floor.")
+  apply_bound("Jordan James", "projected_rush_attempts", 50, "cap", "Move James behind Kaelon Black in the handcuff order.")
+  apply_bound("Jordan James", "projected_rush_yards", 220, "cap", "Move James behind Kaelon Black in the handcuff order.")
+  apply_bound("Jordan James", "projected_targets", 24, "cap", "Move James behind Kaelon Black in the handcuff order.")
+
+  apply_bound("Keaton Mitchell", "projected_rush_attempts", 100, "floor", "Sep. 5 standalone complementary-role carry floor; replaces the prior 85-carry floor.")
+  apply_bound("Keaton Mitchell", "projected_rush_yards", 500, "floor", "Complementary rushing-yardage floor without assuming a Hampton injury.")
+  apply_bound("Keaton Mitchell", "projected_targets", 22, "floor", "Standalone passing-game opportunity floor.")
+  apply_bound("Keaton Mitchell", "projected_receptions", 17, "floor", "Standalone reception floor.")
+  apply_bound("Keaton Mitchell", "projected_receiving_yards", 120, "floor", "Standalone receiving-yardage floor.")
+
+  apply_bound("Isiah Pacheco", "projected_rush_attempts", 85, "cap", "Four-game injured-reserve minimum and uncertain return-role carry cap.")
+  apply_bound("Isiah Pacheco", "projected_rush_yards", 360, "cap", "Four-game injured-reserve minimum rushing-yardage cap.")
+  apply_bound("Isiah Pacheco", "projected_rush_td", 2.5, "cap", "Four-game injured-reserve minimum rushing-touchdown cap.")
+  apply_bound("Isiah Pacheco", "projected_targets", 18, "cap", "Four-game injured-reserve minimum target cap.")
+  apply_bound("Isiah Pacheco", "projected_receptions", 13, "cap", "Four-game injured-reserve minimum reception cap.")
+  apply_bound("Isiah Pacheco", "projected_receiving_yards", 90, "cap", "Four-game injured-reserve minimum receiving-yardage cap.")
+
+  apply_bound("Jacob Saylors", "projected_rush_attempts", 80, "floor", "Transferred Detroit contingent carry floor while Pacheco is unavailable.")
+  apply_bound("Jacob Saylors", "projected_rush_yards", 340, "floor", "Transferred Detroit contingent rushing-yardage floor.")
+  apply_bound("Jacob Saylors", "projected_rush_td", 2.5, "floor", "Transferred Detroit contingent touchdown floor.")
+  apply_bound("Jacob Saylors", "projected_targets", 25, "floor", "Transferred Detroit contingent target floor.")
+  apply_bound("Jacob Saylors", "projected_receptions", 18, "floor", "Transferred Detroit contingent reception floor.")
+  apply_bound("Jacob Saylors", "projected_receiving_yards", 145, "floor", "Transferred Detroit contingent receiving-yardage floor.")
+
+  apply_bound("Tyrone Tracy", "projected_rush_attempts", 100, "cap", "Further reduce Tracy after the performance-driven Najee Harris signing.")
+  apply_bound("Tyrone Tracy", "projected_rush_yards", 425, "cap", "Further reduce Tracy's rushing yardage for the less secure role.")
+  apply_bound("Tyrone Tracy", "projected_rush_td", 2.8, "cap", "Further reduce Tracy's touchdown expectation for the less secure role.")
+  apply_bound("Tyrone Tracy", "projected_targets", 24, "cap", "Further reduce Tracy's target expectation for the less secure role.")
+  apply_bound("Tyrone Tracy", "projected_receptions", 18, "cap", "Further reduce Tracy's reception expectation for the less secure role.")
+  apply_bound("Tyrone Tracy", "projected_receiving_yards", 140, "cap", "Further reduce Tracy's receiving yardage for the less secure role.")
+
+  apply_bound("Najee Harris", "projected_rush_attempts", 100, "floor", "Modest carry floor in the unresolved Giants handcuff competition.")
+  apply_bound("Najee Harris", "projected_rush_yards", 425, "floor", "Modest rushing-yardage floor in the unresolved Giants handcuff competition.")
+  apply_bound("Najee Harris", "projected_rush_td", 2.8, "floor", "Modest touchdown floor in the unresolved Giants handcuff competition.")
+  apply_bound("Najee Harris", "projected_targets", 18, "floor", "Modest receiving-opportunity floor in the unresolved Giants handcuff competition.")
+  apply_bound("Najee Harris", "projected_receptions", 13, "floor", "Modest reception floor in the unresolved Giants handcuff competition.")
+  apply_bound("Najee Harris", "projected_receiving_yards", 90, "floor", "Modest receiving-yardage floor in the unresolved Giants handcuff competition.")
+
+  apply_bound("Malik Davis", "projected_rush_attempts", 95, "floor", "Dallas immediate-handcuff rushing floor.")
+  apply_bound("Malik Davis", "projected_rush_yards", 410, "floor", "Dallas immediate-handcuff rushing-yardage floor.")
+  apply_bound("Malik Davis", "projected_rush_td", 3.2, "floor", "Dallas immediate-handcuff touchdown floor.")
+  apply_bound("Malik Davis", "projected_targets", 22, "floor", "Dallas immediate-handcuff target floor.")
+  apply_bound("Malik Davis", "projected_receptions", 16, "floor", "Dallas immediate-handcuff reception floor.")
+  apply_bound("Malik Davis", "projected_receiving_yards", 125, "floor", "Dallas immediate-handcuff receiving-yardage floor.")
+
+  apply_bound("Braelon Allen", "projected_rush_attempts", 90, "floor", "Jets RB2 rushing-volume floor.")
+  apply_bound("Braelon Allen", "projected_rush_yards", 390, "floor", "Jets RB2 rushing-yardage floor.")
+  apply_bound("Braelon Allen", "projected_rush_td", 3, "floor", "Jets RB2 touchdown floor.")
+  apply_bound("Braelon Allen", "projected_targets", 20, "floor", "Jets RB2 target floor.")
+  apply_bound("Braelon Allen", "projected_receptions", 15, "floor", "Jets RB2 reception floor.")
+  apply_bound("Braelon Allen", "projected_receiving_yards", 110, "floor", "Jets RB2 receiving-yardage floor.")
+
+  # These role changes are already applied to points upstream; reconcile, do not boost twice.
+  for (player in c("Tyler Allgeier", "Emmett Johnson", "Sione Vaki")) {
+    rows <- which(out$position == "RB" & out$player_key == make_player_key(player))
+    if (length(rows) != 1L || !isTRUE(out$active_projection_pool[rows])) next
+    implied <- sos_stat_implied_fantasy_points(out[rows, , drop = FALSE])
+    target <- sos_prob_num(out$stat_target_p50_points[rows])
+    if (!is.finite(implied) || implied <= 0 || !is.finite(target) || target <= 0) next
+    multiplier <- target / implied
+    for (column in intersect(c("projected_rush_attempts", "projected_rush_yards", "projected_rush_td",
+                               "projected_targets", "projected_receptions", "projected_receiving_yards",
+                               "projected_receiving_td", "projected_air_yards", "projected_first_read_targets",
+                               "projected_end_zone_targets", "projected_receiving_first_downs"), names(out))) {
+      out[[column]][rows] <- sos_prob_num(out[[column]][rows]) * multiplier
+    }
+    out$rb_final_review_stat_applied[rows] <- TRUE
+    out$rb_final_review_stat_adjustment_count[rows] <- out$rb_final_review_stat_adjustment_count[rows] + 1L
+    out$rb_final_review_stat_note[rows] <- paste(
+      out$rb_final_review_stat_note[rows], "Sep. 5: synchronize stats to the revised role point target without a second bonus."
+    )
+  }
+  out <- sos_apply_rb_committee_stat_context(out, prediction_season)
 
   if (all(c("projected_rush_yards", "projected_receiving_yards", "projected_scrimmage_yards") %in% names(out))) {
     rb <- out$position == "RB"
@@ -16324,6 +18308,48 @@ sos_apply_rb_final_review_stat_context <- function(wide, prediction_season = 202
     out$projected_total_td[rb] <-
       sos_prob_num(out$projected_rush_td[rb]) +
       sos_prob_num(out$projected_receiving_td[rb])
+  }
+  out
+}
+
+sos_apply_rb_committee_stat_context <- function(out, prediction_season = 2026L) {
+  if (as.integer(prediction_season[[1]]) != 2026L || nrow(out) == 0L) return(out)
+  if (!any(out$position == "RB")) return(out)
+  committees <- list(
+    list(players = c("Aaron Jones", "Jordan Mason"), shares = c(0.50, 0.50), team = "MIN"),
+    list(players = c("Tony Pollard", "Tyjae Spears"), shares = c(0.55, 0.45), team = "TEN")
+  )
+  for (group in committees) {
+    rows <- match(make_player_key(group$players), ifelse(out$position == "RB", out$player_key, NA_character_))
+    if (anyNA(rows) || any(out$current_team[rows] != group$team)) {
+      stop("SOS RB committee context player/team mismatch: ", paste(group$players, collapse = ", "), call. = FALSE)
+    }
+    games <- sos_prob_num(out$stat_target_projected_games[rows])
+    if (any(!is.finite(games) | games <= 0) ||
+        any(!dplyr::coalesce(as.logical(out$active_projection_pool[rows]), FALSE))) next
+    carries <- sos_prob_num(out$projected_rush_attempts[rows])
+    targets <- sos_prob_num(out$projected_targets[rows])
+    if (any(!is.finite(c(carries, targets))) || any(carries <= 0)) {
+      stop("SOS RB committee context requires finite positive carry profiles.", call. = FALSE)
+    }
+    # Split healthy-game opportunities, retaining receiving specialization and availability.
+    pool <- sum((carries + targets) / games)
+    new_carries <- (pool * group$shares - targets / games) * games
+    if (any(new_carries < 0)) stop("Committee targets exceed the approved opportunity share.", call. = FALSE)
+    multiplier <- new_carries / carries
+    if (all(abs(multiplier - 1) <= 1e-8)) next
+    for (column in c("projected_rush_attempts", "projected_rush_yards", "projected_rush_td")) {
+      out[[column]][rows] <- sos_prob_num(out[[column]][rows]) * multiplier
+    }
+    out$rb_final_review_stat_applied[rows] <- TRUE
+    out$rb_final_review_stat_adjustment_count[rows] <- out$rb_final_review_stat_adjustment_count[rows] + 1L
+    note <- paste0("Sep. 5 user committee review: ", paste(group$shares * 100, collapse = "/"),
+      " carries-plus-targets share per healthy game for ", paste(group$players, collapse = "/"),
+      "; preserve receiving profiles, rushing efficiency, and projected games.")
+    out$rb_final_review_stat_note[rows] <- vapply(out$rb_final_review_stat_note[rows], function(x) {
+      paste(c(x[nzchar(x)], note), collapse = " | ")
+    }, character(1))
+    stopifnot(max(abs((new_carries + targets) / games / pool - group$shares)) < 1e-8)
   }
   out
 }
@@ -16360,12 +18386,12 @@ sos_apply_wr_final_review_stat_context <- function(wide, prediction_season = 202
   apply_bound("Jaxon Smith-Njigba", "projected_receiving_yards", 1300, "cap", "Slight lesser-play-caller yardage cap.")
   apply_bound("Jaxon Smith-Njigba", "projected_receiving_td", 7, "cap", "Slight lesser-play-caller touchdown cap.")
 
-  apply_bound("CeeDee Lamb", "projected_targets", 135, "floor", "Dallas lead-target floor.")
-  apply_bound("CeeDee Lamb", "projected_receptions", 90, "floor", "Dallas lead-receiver reception floor.")
-  apply_bound("CeeDee Lamb", "projected_receiving_yards", 1250, "floor", "Dallas lead-receiver yardage floor.")
-  apply_bound("CeeDee Lamb", "projected_receiving_td", 8, "floor", "Dallas lead-receiver touchdown floor.")
-  apply_bound("CeeDee Lamb", "projected_air_yards", 1650, "floor", "Dallas lead-target air-yard floor.")
-  apply_bound("CeeDee Lamb", "projected_first_read_targets", 110, "floor", "Dallas lead-target first-read floor.")
+  apply_bound("CeeDee Lamb", "projected_targets", 130, "cap", "Shared Dallas target-tree cap with George Pickens.")
+  apply_bound("CeeDee Lamb", "projected_receptions", 88, "cap", "Shared Dallas reception cap with George Pickens.")
+  apply_bound("CeeDee Lamb", "projected_receiving_yards", 1200, "cap", "Shared Dallas yardage cap with George Pickens.")
+  apply_bound("CeeDee Lamb", "projected_receiving_td", 8, "cap", "Shared Dallas touchdown cap with George Pickens.")
+  apply_bound("CeeDee Lamb", "projected_air_yards", 1600, "cap", "Shared Dallas air-yard cap with George Pickens.")
+  apply_bound("CeeDee Lamb", "projected_first_read_targets", 105, "cap", "Shared Dallas first-read cap with George Pickens.")
 
   apply_bound("Rashee Rice", "projected_targets", 120, "floor", "Fifteen-game lead-receiver target floor.")
   apply_bound("Rashee Rice", "projected_receptions", 85, "floor", "Fifteen-game reception floor.")
@@ -16441,6 +18467,41 @@ sos_apply_wr_final_review_stat_context <- function(wide, prediction_season = 202
   apply_bound("DJ Moore", "projected_receiving_yards", 800, "floor", "Buffalo No. 1 receiver yardage floor.")
   apply_bound("DJ Moore", "projected_receiving_td", 5, "floor", "Buffalo No. 1 receiver touchdown floor.")
 
+  apply_bound("A.J. Brown", "projected_targets", 130, "floor", "Low-competition lead-target volume floor.")
+  apply_bound("A.J. Brown", "projected_receptions", 85, "floor", "Low-competition lead-target reception floor.")
+  apply_bound("A.J. Brown", "projected_receiving_yards", 1200, "floor", "Low-competition lead-target yardage floor.")
+  apply_bound("A.J. Brown", "projected_receiving_td", 8, "floor", "Low-competition lead-target touchdown floor.")
+
+  apply_bound("Justin Jefferson", "projected_targets", 130, "floor", "Minnesota alpha-receiver target floor.")
+  apply_bound("Justin Jefferson", "projected_receptions", 85, "floor", "Minnesota alpha-receiver reception floor.")
+  apply_bound("Justin Jefferson", "projected_receiving_yards", 1250, "floor", "Minnesota alpha-receiver yardage floor.")
+  apply_bound("Justin Jefferson", "projected_receiving_td", 8, "floor", "Minnesota alpha-receiver touchdown floor.")
+
+  apply_bound("George Pickens", "projected_targets", 112, "cap", "Shared Dallas target-tree cap with CeeDee Lamb.")
+  apply_bound("George Pickens", "projected_receptions", 70, "cap", "Shared Dallas reception cap with CeeDee Lamb.")
+  apply_bound("George Pickens", "projected_receiving_yards", 1050, "cap", "Shared Dallas yardage cap with CeeDee Lamb.")
+  apply_bound("George Pickens", "projected_receiving_td", 7, "cap", "Shared Dallas touchdown cap with CeeDee Lamb.")
+
+  apply_bound("Jauan Jennings", "projected_targets", 70, "cap", "Minnesota No. 3 receiver target cap.")
+  apply_bound("Jauan Jennings", "projected_receptions", 45, "cap", "Minnesota No. 3 receiver reception cap.")
+  apply_bound("Jauan Jennings", "projected_receiving_yards", 650, "cap", "Minnesota No. 3 receiver yardage cap.")
+  apply_bound("Jauan Jennings", "projected_receiving_td", 4, "cap", "Minnesota No. 3 receiver touchdown cap.")
+
+  apply_bound("Michael Pittman", "projected_targets", 105, "cap", "Slight lower-scoring-environment target cap.")
+  apply_bound("Michael Pittman", "projected_receptions", 72, "cap", "Slight lower-scoring-environment reception cap.")
+  apply_bound("Michael Pittman", "projected_receiving_yards", 825, "cap", "Slight lower-scoring-environment yardage cap.")
+  apply_bound("Michael Pittman", "projected_receiving_td", 3.5, "cap", "Lower touchdown-upside cap in Pittsburgh's scoring environment.")
+
+  apply_bound("Alec Pierce", "projected_targets", 65, "cap", "Post-activation health and target-competition cap.")
+  apply_bound("Alec Pierce", "projected_receptions", 38, "cap", "Post-activation health and target-competition cap.")
+  apply_bound("Alec Pierce", "projected_receiving_yards", 650, "cap", "Post-activation health and target-competition cap.")
+  apply_bound("Alec Pierce", "projected_receiving_td", 4, "cap", "Post-activation health and target-competition cap.")
+
+  apply_bound("DJ Moore", "projected_targets", 100, "floor", "Clear Buffalo No. 1 target floor.")
+  apply_bound("DJ Moore", "projected_receptions", 65, "floor", "Clear Buffalo No. 1 reception floor.")
+  apply_bound("DJ Moore", "projected_receiving_yards", 900, "floor", "Clear Buffalo No. 1 yardage floor.")
+  apply_bound("DJ Moore", "projected_receiving_td", 6, "floor", "Josh Allen environment touchdown floor.")
+
   apply_bound("Luther Burden", "projected_targets", 110, "floor", "Breakout target floor after DJ Moore's departure.")
   apply_bound("Luther Burden", "projected_receptions", 75, "floor", "Breakout reception floor.")
   apply_bound("Luther Burden", "projected_receiving_yards", 1000, "floor", "Breakout yardage floor.")
@@ -16483,12 +18544,12 @@ sos_apply_wr_final_review_stat_context <- function(wide, prediction_season = 202
   apply_bound("Denzel Boston", "projected_receiving_yards", 650, "floor", "Starting perimeter yardage floor.")
   apply_bound("Denzel Boston", "projected_receiving_td", 4, "floor", "Starting perimeter touchdown floor.")
 
-  apply_bound("KC Concepcion", "projected_targets", 72, "floor", "Manufactured-touch role target floor.")
-  apply_bound("KC Concepcion", "projected_receptions", 48, "floor", "Manufactured-touch role reception floor.")
-  apply_bound("KC Concepcion", "projected_receiving_yards", 525, "floor", "Manufactured-touch role receiving-yardage floor.")
-  apply_bound("KC Concepcion", "projected_receiving_td", 3, "floor", "Manufactured-touch role receiving-touchdown floor.")
-  apply_bound("KC Concepcion", "projected_rush_attempts", 10, "floor", "Manufactured-touch rushing-attempt floor.")
-  apply_bound("KC Concepcion", "projected_rush_yards", 50, "floor", "Manufactured-touch rushing-yardage floor.")
+  apply_bound("KC Concepcion", "projected_targets", 90, "floor", "Moderate Cleveland lead-receiver target floor with rookie uncertainty.")
+  apply_bound("KC Concepcion", "projected_receptions", 58, "floor", "Moderate lead-receiver reception floor.")
+  apply_bound("KC Concepcion", "projected_receiving_yards", 700, "floor", "Moderate lead-receiver yardage floor.")
+  apply_bound("KC Concepcion", "projected_receiving_td", 4.5, "floor", "Retain touchdown upside without forcing a five-score floor.")
+  apply_bound("KC Concepcion", "projected_rush_attempts", 8, "floor", "Retain a modest manufactured-touch role.")
+  apply_bound("KC Concepcion", "projected_rush_yards", 40, "floor", "Retain modest manufactured-touch yardage.")
 
   apply_bound("Jordyn Tyson", "projected_targets", 65.5, "floor", "Pre-compensate the WR historical curve so the final target profile reflects an 11-game season.")
   apply_bound("Jordyn Tyson", "projected_receptions", 44, "floor", "Pre-compensate the WR historical curve so the final reception profile reflects an 11-game season.")
@@ -16505,6 +18566,23 @@ sos_apply_wr_final_review_stat_context <- function(wide, prediction_season = 202
   apply_bound("Dontayvion Wicks", "projected_receptions", 55, "floor", "Philadelphia starter reception floor.")
   apply_bound("Dontayvion Wicks", "projected_receiving_yards", 800, "floor", "Philadelphia starter yardage floor.")
   apply_bound("Dontayvion Wicks", "projected_receiving_td", 5, "floor", "Philadelphia starter touchdown floor.")
+
+  apply_bound("Matthew Golden", "projected_targets", 75, "floor", "Starting Green Bay perimeter role target floor.")
+  apply_bound("Matthew Golden", "projected_receptions", 46, "floor", "Starting Green Bay perimeter role reception floor.")
+  apply_bound("Matthew Golden", "projected_receiving_yards", 650, "floor", "Starting Green Bay perimeter role yardage floor.")
+  apply_bound("Matthew Golden", "projected_receiving_td", 4.5, "floor", "Starting Green Bay perimeter role touchdown floor.")
+  apply_bound("Matthew Golden", "projected_air_yards", 1050, "floor", "Starting Green Bay perimeter role air-yard floor.")
+
+  apply_bound("Ted Hurst III", "projected_targets", 52, "floor", "Expanded Tampa Bay rotation target floor with McMillan's injury risk.")
+  apply_bound("Ted Hurst III", "projected_receptions", 32, "floor", "Expanded Tampa Bay rotation reception floor with McMillan's injury risk.")
+  apply_bound("Ted Hurst III", "projected_receiving_yards", 440, "floor", "Expanded Tampa Bay rotation yardage floor with McMillan's injury risk.")
+  apply_bound("Ted Hurst III", "projected_receiving_td", 3, "floor", "Expanded Tampa Bay rotation touchdown floor with McMillan's injury risk.")
+
+  apply_bound("Malachi Fields", "projected_targets", 68, "floor", "Giants No. 2 receiver target floor.")
+  apply_bound("Malachi Fields", "projected_receptions", 42, "floor", "Giants No. 2 receiver reception floor.")
+  apply_bound("Malachi Fields", "projected_receiving_yards", 550, "floor", "Giants No. 2 receiver yardage floor.")
+  apply_bound("Malachi Fields", "projected_receiving_td", 3.5, "floor", "Giants No. 2 receiver touchdown floor.")
+  apply_bound("Malachi Fields", "projected_air_yards", 900, "floor", "Giants No. 2 receiver air-yard floor.")
 
   if (all(c("projected_rush_yards", "projected_receiving_yards", "projected_scrimmage_yards") %in% names(out))) {
     wr <- out$position == "WR"
@@ -16750,17 +18828,32 @@ sos_apply_te_final_review_stat_context <- function(wide, prediction_season = 202
   apply_bound("George Kittle", "projected_receiving_yards", 680, "cap", "Modest injury-risk yardage cap.")
   apply_bound("George Kittle", "projected_receiving_td", 5.8, "cap", "Modest injury-risk touchdown cap.")
 
-  apply_bound("Terrance Ferguson", "projected_targets", 58, "floor", "Rams lead-role upside target floor.")
-  apply_bound("Terrance Ferguson", "projected_receptions", 37, "floor", "Rams lead-role upside reception floor.")
-  apply_bound("Terrance Ferguson", "projected_receiving_yards", 410, "floor", "Rams lead-role upside yardage floor.")
-  apply_bound("Terrance Ferguson", "projected_receiving_td", 3.8, "floor", "Rams lead-role upside touchdown floor.")
-  apply_bound("Terrance Ferguson", "projected_first_read_targets", 41, "floor", "Rams lead-role first-read floor.")
-  apply_bound("Terrance Ferguson", "projected_end_zone_targets", 5.2, "floor", "Rams lead-role end-zone floor.")
+  apply_bound("Terrance Ferguson", "projected_targets", 42, "cap", "Approved Rams TE3 target cap.")
+  apply_bound("Terrance Ferguson", "projected_receptions", 28, "cap", "Approved Rams TE3 reception cap.")
+  apply_bound("Terrance Ferguson", "projected_receiving_yards", 320, "cap", "Approved Rams TE3 yardage cap.")
+  apply_bound("Terrance Ferguson", "projected_receiving_td", 3.0, "cap", "Approved Rams TE3 touchdown cap.")
+  apply_bound("Terrance Ferguson", "projected_first_read_targets", 30, "cap", "Approved Rams TE3 first-read cap.")
+  apply_bound("Terrance Ferguson", "projected_end_zone_targets", 4.2, "cap", "Approved Rams TE3 end-zone cap.")
 
-  apply_bound("Colby Parkinson", "projected_targets", 43, "cap", "Ferguson competition target cap.")
-  apply_bound("Colby Parkinson", "projected_receptions", 33, "cap", "Ferguson competition reception cap.")
-  apply_bound("Colby Parkinson", "projected_receiving_yards", 330, "cap", "Ferguson competition yardage cap.")
-  apply_bound("Colby Parkinson", "projected_receiving_td", 3.3, "cap", "Ferguson competition touchdown cap.")
+  apply_bound("Colby Parkinson", "projected_targets", 48, "floor", "Approved Rams TE1 target floor.")
+  apply_bound("Colby Parkinson", "projected_receptions", 34, "floor", "Approved Rams TE1 reception floor.")
+  apply_bound("Colby Parkinson", "projected_receiving_yards", 380, "floor", "Approved Rams TE1 yardage floor.")
+  apply_bound("Colby Parkinson", "projected_receiving_td", 3.4, "floor", "Approved Rams TE1 touchdown floor.")
+  apply_bound("Max Klare", "projected_targets", 10, "floor", "Preserve a limited Rams TE4 target allocation.")
+  apply_bound("Max Klare", "projected_receptions", 7, "floor", "Preserve a limited Rams TE4 reception allocation.")
+  apply_bound("Max Klare", "projected_receiving_yards", 70, "floor", "Preserve a limited Rams TE4 yardage allocation.")
+
+  apply_bound("Colston Loveland", "projected_targets", 100, "floor", "Breakout-upside target floor.")
+  apply_bound("Colston Loveland", "projected_receptions", 70, "floor", "Breakout-upside reception floor.")
+  apply_bound("Colston Loveland", "projected_receiving_yards", 750, "floor", "Breakout-upside receiving-yardage floor.")
+  apply_bound("Colston Loveland", "projected_receiving_td", 6.5, "floor", "Breakout-upside touchdown floor.")
+  apply_bound("Colston Loveland", "projected_first_read_targets", 72, "floor", "Breakout-upside first-read floor.")
+
+  apply_bound("Tucker Kraft", "projected_targets", 78, "floor", "Potential Green Bay target-leader volume floor.")
+  apply_bound("Tucker Kraft", "projected_receptions", 62, "floor", "Potential Green Bay target-leader reception floor.")
+  apply_bound("Tucker Kraft", "projected_receiving_yards", 710, "floor", "Potential Green Bay target-leader yardage floor.")
+  apply_bound("Tucker Kraft", "projected_receiving_td", 6.2, "floor", "Potential Green Bay target-leader touchdown floor.")
+  apply_bound("Tucker Kraft", "projected_first_read_targets", 55, "floor", "Potential Green Bay target-leader first-read floor.")
 
   if (all(c("projected_rush_yards", "projected_receiving_yards", "projected_scrimmage_yards") %in% names(out))) {
     te <- out$position == "TE"
@@ -16980,6 +19073,25 @@ sos_apply_dst_final_review_stat_context <- function(wide, prediction_season = 20
   out
 }
 
+sos_explicit_stat_promotion_limits <- function(position_rows, wide, prediction_season) {
+  limits <- rep(0.80, nrow(position_rows))
+  if (as.integer(prediction_season[[1]]) != 2026L) return(limits)
+  required <- c("position", "player_key", "adjusted_p50_points")
+  stat_required <- c("position", "player_key", "projected_targets", "projected_receptions", "projected_receiving_yards")
+  if (!all(required %in% names(position_rows)) || !all(stat_required %in% names(wide))) return(limits)
+  stat_row <- match(paste(position_rows$position, position_rows$player_key), paste(wide$position, wide$player_key))
+  # User-approved exception: enforce Allen's reviewed stats and absolute ceiling,
+  # independent of the starting estimate; all other rows retain the 80% audit.
+  reviewed <- position_rows$position == "RB" & position_rows$player_key == make_player_key("LeQuint Allen") &
+    abs(sos_prob_num(wide$projected_targets[stat_row]) - 22) <= 1e-8 &
+    abs(sos_prob_num(wide$projected_receptions[stat_row]) - 16) <= 1e-8 &
+    abs(sos_prob_num(wide$projected_receiving_yards[stat_row]) - 130) <= 1e-8 &
+    is.finite(position_rows$adjusted_p50_points) & position_rows$adjusted_p50_points > 0 &
+    position_rows$adjusted_p50_points <= 40.7424137171836 + 1e-6
+  limits[which(reviewed %in% TRUE)] <- Inf
+  limits
+}
+
 sos_promote_final_review_stats_to_projection_board <- function(
     board,
     wide,
@@ -17151,6 +19263,7 @@ sos_promote_final_review_stats_to_projection_board <- function(
       ) &
         .data$position %in% c("QB", "RB", "WR", "TE", "K") &
         is.finite(.data$final_stat_implied_points) &
+        (.data$adjusted_p50_points > 1e-8 | .data$final_stat_implied_points > 1e-8) &
         (
           .data$stat_qb_pass_attempt_sanity_applied |
             .data$qb_final_review_stat_applied |
@@ -17166,10 +19279,19 @@ sos_promote_final_review_stats_to_projection_board <- function(
             .data$k_historical_curve_applied
         ),
       pre_final_review_stat_p50_points = .data$adjusted_p50_points,
-      final_review_stat_p50_multiplier = dplyr::if_else(
+      final_review_stat_raw_p50_multiplier = dplyr::if_else(
         .data$final_review_stat_promotion_applied,
         .data$final_stat_implied_points / pmax(.data$adjusted_p50_points, 1e-6),
         1
+      ),
+      final_review_stat_p50_multiplier = dplyr::case_when(
+        .data$position == "TE" &
+          .data$final_review_stat_promotion_applied &
+          .data$te_historical_curve_applied &
+          !.data$te_final_review_stat_applied &
+          !.data$te_final_review_projection_applied ~
+          pmin(1.35, pmax(0.65, .data$final_review_stat_raw_p50_multiplier)),
+        TRUE ~ .data$final_review_stat_raw_p50_multiplier
       )
     )
   promote <- out$final_review_stat_promotion_applied
@@ -17241,14 +19363,21 @@ sos_promote_final_review_stats_to_projection_board <- function(
   )
   audit <- dplyr::bind_rows(lapply(audit_positions, function(pos) {
     position_rows <- out[out$position == pos, , drop = FALSE]
+    sep2_explicit_context <- if ("sep2_post_cuts_context_applied" %in% names(position_rows)) {
+      dplyr::coalesce(as.logical(position_rows$sep2_post_cuts_context_applied), FALSE)
+    } else {
+      rep(FALSE, nrow(position_rows))
+    }
     explicit_context <- switch(
       pos,
       QB = position_rows$qb_final_review_projection_applied,
-      RB = position_rows$rb_final_review_projection_applied,
-      WR = position_rows$wr_final_review_projection_applied,
+      RB = position_rows$rb_final_review_projection_applied |
+        position_rows$rb_final_review_stat_applied | sep2_explicit_context,
+      WR = position_rows$wr_final_review_projection_applied |
+        position_rows$wr_final_review_stat_applied | sep2_explicit_context,
       TE = position_rows$te_final_review_projection_applied |
-        position_rows$te_final_review_stat_applied,
-      K = rep(FALSE, nrow(position_rows))
+        position_rows$te_final_review_stat_applied | sep2_explicit_context,
+      K = sep2_explicit_context
     )
     historical_curve_applied <- switch(
       pos,
@@ -17262,6 +19391,13 @@ sos_promote_final_review_stats_to_projection_board <- function(
     generic <- position_rows$final_review_stat_promotion_applied &
       !explicit_context & !historical_curve
     explicit <- position_rows$final_review_stat_promotion_applied & explicit_context
+    explicit_limits <- sos_explicit_stat_promotion_limits(position_rows, wide, prediction_season)
+    explicit_delta <- position_rows$final_review_stat_p50_multiplier - 1
+    # The approval only covers the reviewed upward adjustment, never a >80% cut.
+    explicit_limits[which(explicit_delta < 0)] <- 0.80
+    exception_used <- explicit & explicit_limits > 0.80 & abs(explicit_delta) > 0.80 + 1e-8
+    explicit_within_limit <- all(is.finite(explicit_delta[explicit]) &
+      abs(explicit_delta[explicit]) <= explicit_limits[explicit] + 1e-8)
     generic_max <- if (any(generic)) {
       max(abs(position_rows$final_review_stat_p50_multiplier[generic] - 1), na.rm = TRUE)
     } else 0
@@ -17285,13 +19421,16 @@ sos_promote_final_review_stats_to_projection_board <- function(
       max_abs_p50_pct = max(abs(position_rows$final_review_stat_p50_multiplier - 1), na.rm = TRUE),
       max_generic_abs_p50_pct = generic_max,
       max_explicit_context_abs_p50_pct = explicit_max,
+      approved_exception_rows = sum(exception_used, na.rm = TRUE),
+      approved_exception_note = if (any(exception_used, na.rm = TRUE))
+        "User-approved 2026 LeQuint Allen: 22 targets, 16 receptions, 130 receiving yards, p50 <=40.742414; percentage-independent ceiling. Other rows retain 80% limit." else "",
       historical_curve_rows = sum(historical_curve, na.rm = TRUE),
       max_historical_curve_abs_p50_pct = historical_curve_max,
       historical_curve_abs_p50_pct_limit = historical_curve_limit,
       status = if (
         all(is.finite(position_rows$adjusted_p50_points)) &&
           generic_max <= 0.12 + 1e-8 &&
-          explicit_max <= 0.80 + 1e-8 &&
+          explicit_within_limit &&
           historical_curve_max <= historical_curve_limit + 1e-8
       ) "PASS" else "FAIL",
       stringsAsFactors = FALSE
@@ -18384,6 +20523,35 @@ sos_apply_projection_pool_flags <- function(df) {
     collapse = "|"
   )
   forced_inactive <- grepl(inactive_pattern, note, perl = TRUE)
+  if ("nfl_context_brief_event_type" %in% names(out)) {
+    structured_inactive <- as.character(out$nfl_context_brief_event_type) %in% c(
+      "season_ending_injury", "unsigned_inactive", "waived_injured_inactive"
+    )
+    forced_inactive <- forced_inactive | dplyr::coalesce(structured_inactive, FALSE)
+  }
+  if ("aug31_context_delta_type" %in% names(out)) {
+    aug31_structured_inactive <- as.character(out$aug31_context_delta_type) %in% c(
+      "waived_inactive", "season_ending_injury", "kicker_competition_backup",
+      "released_kicker_inactive"
+    )
+    forced_inactive <- forced_inactive |
+      dplyr::coalesce(aug31_structured_inactive, FALSE)
+  }
+  if ("sep1_depth_context_type" %in% names(out)) {
+    sep1_structured_inactive <- as.character(out$sep1_depth_context_type) %in% c(
+      "practice_squad_inactive", "not_on_depth_chart_inactive",
+      "injured_reserve_inactive", "waived_inactive", "released_inactive"
+    )
+    forced_inactive <- forced_inactive |
+      dplyr::coalesce(sep1_structured_inactive, FALSE)
+  }
+  if ("sep2_post_cuts_context_type" %in% names(out)) {
+    sep2_structured_inactive <- as.character(out$sep2_post_cuts_context_type) %in% c(
+      "free_agent_after_final_cuts"
+    )
+    forced_inactive <- forced_inactive |
+      dplyr::coalesce(sep2_structured_inactive, FALSE)
+  }
 
   rank_reference <- rep(NA_real_, nrow(out))
   for (candidate in c(
@@ -19062,6 +21230,24 @@ sos_seed_manual_rank_missing_players <- function(board, manual_ranks, prediction
     donor$manual_rank_seeded_player <- TRUE
     donor$manual_rank_seed_donor <- donor_player
     donor$manual_rank_seed_percentile <- source_percentile
+    registry_path <- file.path(sos_2026_depth_chart_dir(), paste0("sos_seeded_omfg_", prediction_season, ".csv"))
+    if (file.exists(registry_path)) {
+      registry <- utils::read.csv(registry_path, stringsAsFactors = FALSE)
+      required <- c("prediction_season", "position", "player_key", "official_omfg", "score_provenance")
+      if (!all(required %in% names(registry)) ||
+          anyDuplicated(paste(registry$position, registry$player_key)) ||
+          any(registry$prediction_season != prediction_season) ||
+          any(!is.finite(registry$official_omfg) | registry$official_omfg < 0 | registry$official_omfg > 100)) {
+        stop("Seeded OMFG registry failed validation.", call. = FALSE)
+      }
+      saved <- match(paste(position, donor$player_key), paste(registry$position, registry$player_key))
+      if (!is.na(saved)) {
+        # Preserve the existing surrogate score, not the donor's changing score.
+        donor$official_omfg <- registry$official_omfg[saved]
+        donor$preseason_omfg <- registry$official_omfg[saved]
+        donor$seeded_omfg_provenance <- registry$score_provenance[saved]
+      }
+    }
     donor
   })
   seeded <- dplyr::bind_rows(seeded)
@@ -19109,10 +21295,49 @@ sos_apply_manual_rank_context <- function(
   # manual rank refresh. Zero confidence keeps them in the pool without
   # adding a subjective manual-rank contribution.
   active_news_keys <- data.frame(
-    position = "WR",
-    player_key = make_player_key("Keenan Allen"),
+    position = c(
+      "WR", "QB", "QB", "QB", "RB", "TE", "TE", "TE", "K", "K", "K",
+      "WR", "WR", "RB"
+    ),
+    player_key = make_player_key(c(
+      "Keenan Allen", "Joshua Dobbs", "Quinn Ewers", "Kyle McCord", "Corey Kiner",
+      "Hunter Long", "Mark Redman", "Jonnu Smith", "Blake Grupe", "Spencer Shrader", "Daniel Carlson",
+      "Sterling Shepard", "Zay Jones", "Zamir White"
+    )),
+    context_team = c(
+      "IND", "DET", "JAX", "MIA", "NE", "ARI", "GB", "GB", "NYJ", "IND", "NO",
+      "HOU", "HOU", "NO"
+    ),
+    context_note = c(
+      "Confirmed Indianapolis signing after the manual-rank file was created; retain model-driven rank.",
+      "Approved Week 1 depth update moved Dobbs to Detroit; retain a model-driven backup rank.",
+      "Approved Week 1 depth update moved Ewers to Jacksonville; retain a model-driven backup rank.",
+      "Approved Week 1 depth update moved McCord to Miami; retain a model-driven backup rank.",
+      "Approved Week 1 depth update moved Kiner to New England; retain a model-driven depth rank.",
+      "Approved Week 1 depth update moved Long to Arizona; retain a model-driven depth rank.",
+      "Approved Week 1 depth update moved Redman to Green Bay; retain a model-driven depth rank.",
+      "Confirmed Green Bay TE2 Jonnu Smith was added after the manual-rank file; retain a conservative model-driven rank.",
+      "Confirmed Jets K1 Blake Grupe was added after the manual-rank file; retain a model-driven starter rank.",
+      "Confirmed Colts K1 Spencer Shrader was added after the manual-rank file; retain a model-driven starter rank.",
+      "Approved Week 1 depth chart confirms Daniel Carlson as New Orleans K1; retain a model-driven starter rank.",
+      "Retain Shepard only long enough for the dated context layer to record his confirmed inactive transition.",
+      "Retain Zay Jones only long enough for the dated context layer to record his confirmed inactive transition.",
+      "Retain Zamir White only long enough for the dated context layer to record his practice-squad inactive transition."
+    ),
     stringsAsFactors = FALSE
   )
+  current_kicker_starters <- sos_k_starter_depth_chart_2026() |>
+    dplyr::transmute(
+      position = "K",
+      player_key = .data$player_key,
+      context_team = .data$team,
+      context_note = paste0(
+        "Current confirmed ", .data$team,
+        " K1 from the approved depth chart; retain a model-driven starter rank when the manual file is stale."
+      )
+    )
+  active_news_keys <- dplyr::bind_rows(active_news_keys, current_kicker_starters) |>
+    dplyr::distinct(.data$position, .data$player_key, .keep_all = TRUE)
   manual_rank_field_sizes <- ranks |>
     dplyr::group_by(.data$position) |>
     dplyr::summarise(
@@ -19120,20 +21345,20 @@ sos_apply_manual_rank_context <- function(
       .groups = "drop"
     )
   active_news_rows <- board |>
-    dplyr::semi_join(active_news_keys, by = c("position", "player_key")) |>
+    dplyr::inner_join(active_news_keys, by = c("position", "player_key"), relationship = "many-to-one") |>
     dplyr::anti_join(ranks, by = c("position", "player_key")) |>
     dplyr::transmute(
       position = .data$position,
       player_key = .data$player_key,
       manual_player = .data$player,
-      manual_team = "IND",
+      manual_team = .data$context_team,
       manual_rank = dplyr::coalesce(
         safe_numeric(.data$baseline_projection_rank),
         safe_numeric(.data$rank)
       ),
       manual_rank_confidence = 0,
-      manual_rank_note = "Confirmed Indianapolis signing after the manual-rank file was created; retain model-driven rank.",
-      manual_rank_source_file = "nfl_context_brief_2026_08_19",
+      manual_rank_note = .data$context_note,
+      manual_rank_source_file = "nfl_context_brief_2026_08_31",
       manual_rank_source_row = NA_integer_
     ) |>
     dplyr::left_join(manual_rank_field_sizes, by = "position")
@@ -19700,11 +21925,11 @@ sos_k_starter_depth_chart_2026 <- function() {
       "Chad Ryland", "Nick Folk", "Tyler Loop", "Tyler Bass",
       "Ryan Fitzgerald", "Cairo Santos", "Evan McPherson", "Andre Szmyt",
       "Brandon Aubrey", "Wil Lutz", "Jake Bates", "Trey Smack",
-      "Ka'imi Fairbairn", "Blake Grupe", "Cam Little", "Harrison Butker",
-      "Cameron Dicker", "Harrison Mevis", "Kansei Matsuzawa", "Zane Gonzalez",
-      "Will Reichard", "Andres Borregales", "Charlie Smyth", "Ben Sauls",
-      "Jason Sanders", "Jake Elliott", "Chris Boswell", "Jason Myers",
-      "Eddy Pineiro", "Chase McLaughlin", "Joey Slye", "Jake Moody"
+      "Ka'imi Fairbairn", "Spencer Shrader", "Cam Little", "Harrison Butker",
+      "Cameron Dicker", "Harrison Mevis", "Matt Gay", "Riley Patterson",
+      "Will Reichard", "Andres Borregales", "Daniel Carlson", "Dominic Zvada",
+      "Blake Grupe", "Jake Elliott", "Chris Boswell", "Jason Myers",
+      "Eddy Pineiro", "Chase McLaughlin", "Joey Slye", "Drew Stevens"
     ),
     starter_source = c(
       rep("ourlads_2026_depth_chart", 13),
@@ -19715,7 +21940,18 @@ sos_k_starter_depth_chart_2026 <- function() {
     ),
     stringsAsFactors = FALSE
   ) |>
-    dplyr::mutate(player_key = make_player_key(.data$player))
+    dplyr::mutate(
+      starter_source = dplyr::if_else(
+        .data$team == "NYJ",
+        "official_transaction_depth_override",
+        dplyr::if_else(
+          .data$team == "NO",
+          "nfl_context_brief_provisional_competition_leader",
+          .data$starter_source
+        )
+      ),
+      player_key = make_player_key(.data$player)
+    )
 }
 
 sos_apply_k_starter_depth_chart <- function(board, prediction_season = 2026L) {
@@ -19734,10 +21970,7 @@ sos_apply_k_starter_depth_chart <- function(board, prediction_season = 2026L) {
 
   starters <- sos_k_starter_depth_chart_2026()
   remove_key <- make_player_key("Matt Gay")
-  remove_rows <- toupper(as.character(out$position)) == "K" &
-    as.character(out$player_key) == remove_key
-  removed_rows <- sum(remove_rows, na.rm = TRUE)
-  out <- out[!remove_rows, , drop = FALSE]
+  removed_rows <- 0L
 
   starter_match <- match(as.character(out$player_key), starters$player_key)
   confirmed <- toupper(as.character(out$position)) == "K" & !is.na(starter_match)
@@ -19773,12 +22006,7 @@ sos_apply_k_starter_depth_chart <- function(board, prediction_season = 2026L) {
     ),
     status = if (
       length(found_keys) == 32L && nrow(missing_starters) == 0L &&
-        !anyDuplicated(starters$team) &&
-        !any(
-          toupper(as.character(out$position)) == "K" &
-            as.character(out$player_key) == remove_key,
-          na.rm = TRUE
-        )
+        !anyDuplicated(starters$team)
     ) "PASS" else "FAIL",
     stringsAsFactors = FALSE
   )
@@ -20027,21 +22255,21 @@ build_core_sos_market_rank_review <- function(
     dplyr::ungroup() |>
     dplyr::group_by(.data$position) |>
     dplyr::mutate(
-      qb_final_review_rank_guardrail_target = dplyr::if_else(
-        .data$position == "QB" &
-          .data$player_key == make_player_key("Kirk Cousins") &
-          .data$prediction_season == 2026L,
-        32L,
-        NA_integer_
+      qb_final_review_rank_guardrail_target = dplyr::case_when(
+        .data$position == "QB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Joe Burrow") ~ 5L,
+        .data$position == "QB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Jayden Daniels") ~ 6L,
+        .data$position == "QB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Michael Penix") ~ 28L,
+        .data$position == "QB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Kirk Cousins") ~ 32L,
+        TRUE ~ NA_integer_
       ),
-      qb_final_review_rank_guardrail_score_floor = dplyr::if_else(
-        is.finite(.data$qb_final_review_rank_guardrail_target),
-        dplyr::nth(
-          sort(.data$market_blend_score_all_players, decreasing = TRUE),
-          n = pmin(32L, dplyr::n()),
-          default = -Inf
-        ) + 1e-6,
-        NA_real_
+      qb_final_review_rank_guardrail_score_floor = sos_rank_guardrail_score(
+        .data$market_blend_score_all_players,
+        .data$qb_final_review_rank_guardrail_target,
+        offset = 1e-6
       ),
       qb_final_review_rank_guardrail_applied =
         is.finite(.data$qb_final_review_rank_guardrail_score_floor) &
@@ -20054,7 +22282,15 @@ build_core_sos_market_rank_review <- function(
       ),
       rb_final_review_rank_floor_target = dplyr::case_when(
         .data$position == "RB" & .data$prediction_season == 2026L &
-          .data$player_key == make_player_key("Kenneth Walker") ~ 15L,
+          .data$player_key == make_player_key("Jordan Mason") ~ 40L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Tyjae Spears") ~ 43L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Emmett Johnson") ~ 55L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Jahmyr Gibbs") ~ 1L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Kenneth Walker") ~ 12L,
         .data$position == "RB" & .data$prediction_season == 2026L &
           .data$player_key == make_player_key("Bhayshul Tuten") ~ 20L,
         .data$position == "RB" & .data$prediction_season == 2026L &
@@ -20062,7 +22298,35 @@ build_core_sos_market_rank_review <- function(
         .data$position == "RB" & .data$prediction_season == 2026L &
           .data$player_key == make_player_key("Jonathon Brooks") ~ 36L,
         .data$position == "RB" & .data$prediction_season == 2026L &
-          .data$player_key == make_player_key("Blake Corum") ~ 40L,
+          .data$player_key == make_player_key("Blake Corum") ~ 32L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Rhamondre Stevenson") ~ 27L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Malik Davis") ~ 65L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Kendre Miller") ~ 65L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Ray Davis") ~ 50L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Brian Robinson") ~ 45L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("De'Von Achane") ~ 11L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("D'Andre Swift") ~ 15L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Travis Etienne") ~ 18L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Chris Rodriguez") ~ 42L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Kaelon Black") ~ 55L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Keaton Mitchell") ~ 48L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("MarShawn Lloyd") ~ 36L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Mike Washington Jr.") ~ 43L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Tyler Allgeier") ~ 42L,
         TRUE ~ NA_integer_
       ),
       rb_final_review_rank_score_floor = sos_rank_guardrail_score(
@@ -20086,11 +22350,12 @@ build_core_sos_market_rank_review <- function(
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Marvin Harrison") ~ 18L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Rome Odunze") ~ 17L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Christian Watson") ~ 18L,
-        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Michael Pittman") ~ 22L,
+        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("A.J. Brown") ~ 5L,
+        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Justin Jefferson") ~ 6L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Luther Burden") ~ 20L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Malik Nabers") ~ 16L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Mike Evans") ~ 30L,
-        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("DJ Moore") ~ 30L,
+        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("DJ Moore") ~ 24L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Parker Washington") ~ 36L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Stefon Diggs") ~ 36L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("De'Zhaun Stribling") ~ 44L,
@@ -20117,6 +22382,10 @@ build_core_sos_market_rank_review <- function(
           .data$player_key == make_player_key("Brock Bowers") ~ 1L,
         .data$position == "TE" & .data$prediction_season == 2026L &
           .data$player_key == make_player_key("Terrance Ferguson") ~ 30L,
+        .data$position == "TE" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Colston Loveland") ~ 5L,
+        .data$position == "TE" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Tucker Kraft") ~ 6L,
         TRUE ~ NA_integer_
       ),
       te_final_review_rank_score_floor = sos_rank_guardrail_score(
@@ -20132,21 +22401,27 @@ build_core_sos_market_rank_review <- function(
         .data$te_final_review_rank_score_floor,
         .data$market_blend_score_all_players
       ),
-      qb_final_review_rank_ceiling_target = dplyr::if_else(
-        .data$position == "QB" &
-          .data$player_key == make_player_key("Bo Nix") &
-          .data$prediction_season == 2026L,
-        13L,
-        NA_integer_
+      qb_final_review_rank_ceiling_target = dplyr::case_when(
+        .data$position == "QB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Patrick Mahomes") ~ 11L,
+        .data$position == "QB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Bo Nix") ~ 13L,
+        .data$position == "QB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Trevor Lawrence") ~ 8L,
+        .data$position == "QB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Caleb Williams") ~ 9L,
+        .data$position == "QB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Tua Tagovailoa") ~ 35L,
+        .data$position == "QB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Justin Herbert") ~ 8L,
+        .data$position == "QB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Matthew Stafford") ~ 14L,
+        TRUE ~ NA_integer_
       ),
-      qb_final_review_rank_guardrail_score_ceiling = dplyr::if_else(
-        is.finite(.data$qb_final_review_rank_ceiling_target),
-        dplyr::nth(
-          sort(.data$market_blend_score_all_players, decreasing = TRUE),
-          n = pmin(13L, dplyr::n()),
-          default = Inf
-        ) - 1e-6,
-        NA_real_
+      qb_final_review_rank_guardrail_score_ceiling = sos_rank_guardrail_score(
+        .data$market_blend_score_all_players,
+        .data$qb_final_review_rank_ceiling_target,
+        offset = -1e-6
       ),
       qb_final_review_rank_ceiling_applied =
         is.finite(.data$qb_final_review_rank_guardrail_score_ceiling) &
@@ -20163,7 +22438,37 @@ build_core_sos_market_rank_review <- function(
         .data$position == "RB" & .data$prediction_season == 2026L &
           .data$player_key == make_player_key("De'Von Achane") ~ 12L,
         .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Ashton Jeanty") ~ 12L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Josh Jacobs") ~ 30L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Tyrone Tracy") ~ 60L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Kyren Williams") ~ 12L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("TreVeyon Henderson") ~ 30L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Kimani Vidal") ~ 70L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
           .data$player_key == make_player_key("Travis Etienne") ~ 20L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Bhayshul Tuten") ~ 21L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Alvin Kamara") ~ 65L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Jaydon Blue") ~ 80L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Devin Neal") ~ 85L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Ty Johnson") ~ 75L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("James Conner") ~ 65L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Nicholas Singleton") ~ 68L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Kaytron Allen") ~ 70L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Jordan James") ~ 65L,
         .data$position == "RB" & .data$prediction_season == 2026L &
           .data$player_key == make_player_key("Isaac Guerendo") ~ 120L,
         TRUE ~ NA_integer_
@@ -20185,11 +22490,17 @@ build_core_sos_market_rank_review <- function(
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Jaxon Smith-Njigba") ~ 5L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Courtland Sutton") ~ 30L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("DK Metcalf") ~ 30L,
-        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Alec Pierce") ~ 45L,
+        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Alec Pierce") ~ 60L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Michael Wilson") ~ 50L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Brian Thomas") ~ 35L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Travis Hunter") ~ 80L,
         .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Jordyn Tyson") ~ 85L,
+        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Michael Pittman") ~ 34L,
+        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("CeeDee Lamb") ~ 7L,
+        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("George Pickens") ~ 8L,
+        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Jauan Jennings") ~ 65L,
+        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("KC Concepcion") ~ 42L,
+        .data$position == "WR" & .data$prediction_season == 2026L & .data$player_key == make_player_key("Keenan Allen") ~ 65L,
         TRUE ~ NA_integer_
       ),
       wr_final_review_rank_score_ceiling = sos_rank_guardrail_score(
@@ -20207,7 +22518,7 @@ build_core_sos_market_rank_review <- function(
       ),
       te_final_review_rank_ceiling_target = dplyr::case_when(
         .data$position == "TE" & .data$prediction_season == 2026L &
-          .data$player_key == make_player_key("George Kittle") ~ 6L,
+          .data$player_key == make_player_key("George Kittle") ~ 7L,
         TRUE ~ NA_integer_
       ),
       te_final_review_rank_score_ceiling = sos_rank_guardrail_score(
@@ -20227,7 +22538,7 @@ build_core_sos_market_rank_review <- function(
         .data$position == "DST" & .data$prediction_season == 2026L &
           .data$player_key == make_player_key("Houston Texans") ~ 1L,
         .data$position == "DST" & .data$prediction_season == 2026L &
-          .data$player_key == make_player_key("Los Angeles Rams") ~ 6L,
+          .data$player_key == make_player_key("Los Angeles Rams") ~ 4L,
         TRUE ~ NA_integer_
       ),
       dst_final_review_rank_score_floor = sos_rank_guardrail_score(
@@ -20276,7 +22587,29 @@ build_core_sos_market_rank_review <- function(
       ),
       nfl_context_exact_rank_target = dplyr::case_when(
         .data$position == "RB" & .data$prediction_season == 2026L &
-          .data$player_key == make_player_key("Najee Harris") ~ 76L,
+          .data$player_key == make_player_key("Najee Harris") ~ 59L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Braelon Allen") ~ 57L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Jacob Saylors") ~ 58L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Tyrone Tracy") ~ 60L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Malik Davis") ~ 62L,
+        .data$position == "RB" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Isiah Pacheco") ~ 65L,
+        .data$position == "WR" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Matthew Golden") ~ 62L,
+        .data$position == "WR" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Malachi Fields") ~ 75L,
+        .data$position == "WR" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Ted Hurst III") ~ 82L,
+        .data$position == "WR" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("KC Concepcion") ~ 45L,
+        .data$position == "TE" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("Tucker Kraft") ~ 6L,
+        .data$position == "TE" & .data$prediction_season == 2026L &
+          .data$player_key == make_player_key("George Kittle") ~ 7L,
         .data$position == "TE" & .data$prediction_season == 2026L &
           .data$player_key == make_player_key("Darren Waller") ~ 34L,
         TRUE ~ NA_integer_
@@ -20289,6 +22622,15 @@ build_core_sos_market_rank_review <- function(
       market_blend_score_all_players = dplyr::if_else(
         .data$nfl_context_exact_rank_applied,
         .data$nfl_context_exact_rank_score,
+        .data$market_blend_score_all_players
+      ),
+      post_cuts_free_agent = dplyr::coalesce(
+        as.character(.data$sep2_post_cuts_context_type) == "free_agent_after_final_cuts",
+        FALSE
+      ),
+      market_blend_score_all_players = dplyr::if_else(
+        .data$post_cuts_free_agent,
+        -100 - dplyr::coalesce(as.numeric(.data$manual_adjusted_model_rank), 999) / 1000,
         .data$market_blend_score_all_players
       ),
       qb_final_review_rank_guardrail_applied =
@@ -20735,7 +23077,8 @@ sos_editor_stat_columns <- function(position) {
       "Projected Interceptions" = "projected_interceptions",
       "Projected Rush Attempts" = "projected_rush_attempts",
       "Projected Rush Yards" = "projected_rush_yards",
-      "Projected Rush TDs" = "projected_rush_td"
+      "Projected Rush TDs" = "projected_rush_td",
+      "Projected Fumbles" = "projected_fumbles"
     ),
     RB = c(
       "Projected Rush Attempts" = "projected_rush_attempts",
@@ -21030,6 +23373,9 @@ build_core_sos_historical_editor_exports <- function(
     output_dir = sos_historical_editor_output_dir(),
     write_output = TRUE
 ) {
+  if (any(as.integer(seasons) >= 2026L)) {
+    stop("2026 historical publication is held until native OMFG is verified. Use run_core_sos_week_closeout(); preseason scores will not be substituted for Week 1 production scores.", call. = FALSE)
+  }
   load_model_core_packages()
   seasons <- sort(unique(as.integer(seasons)))
   positions <- c("QB", "RB", "WR", "TE", "K", "DST")
@@ -21757,6 +24103,361 @@ build_core_sos_projection_rank_calibration <- function(
   )
   assign("core_sos_projection_rank_calibration", out, envir = .GlobalEnv)
   invisible(out)
+}
+
+sos_final_curve_rank_bucket <- function(position, projected_rank) {
+  position <- toupper(as.character(position))
+  projected_rank <- safe_numeric(projected_rank)
+  bucket_min <- dplyr::case_when(
+    position == "QB" & projected_rank <= 6 ~ 1,
+    position == "QB" & projected_rank <= 12 ~ 7,
+    position == "QB" & projected_rank <= 18 ~ 13,
+    position == "QB" & projected_rank <= 24 ~ 19,
+    position == "QB" & projected_rank <= 36 ~ 25,
+    position == "QB" ~ 37,
+    position %in% c("RB", "WR") & projected_rank <= 12 ~ 1,
+    position %in% c("RB", "WR") & projected_rank <= 24 ~ 13,
+    position %in% c("RB", "WR") & projected_rank <= 36 ~ 25,
+    position %in% c("RB", "WR") & projected_rank <= 48 ~ 37,
+    position %in% c("RB", "WR") & projected_rank <= 60 ~ 49,
+    position %in% c("RB", "WR") ~ 61,
+    position == "TE" & projected_rank <= 6 ~ 1,
+    position == "TE" & projected_rank <= 12 ~ 7,
+    position == "TE" & projected_rank <= 18 ~ 13,
+    position == "TE" & projected_rank <= 24 ~ 19,
+    position == "TE" & projected_rank <= 36 ~ 25,
+    position == "TE" ~ 37,
+    position %in% c("K", "DST") & projected_rank <= 6 ~ 1,
+    position %in% c("K", "DST") & projected_rank <= 12 ~ 7,
+    position %in% c("K", "DST") & projected_rank <= 18 ~ 13,
+    position %in% c("K", "DST") & projected_rank <= 24 ~ 19,
+    position %in% c("K", "DST") & projected_rank <= 32 ~ 25,
+    position %in% c("K", "DST") ~ 33,
+    TRUE ~ NA_real_
+  )
+  bucket_max <- dplyr::case_when(
+    position == "QB" & bucket_min == 1 ~ 6,
+    position == "QB" & bucket_min == 7 ~ 12,
+    position == "QB" & bucket_min == 13 ~ 18,
+    position == "QB" & bucket_min == 19 ~ 24,
+    position == "QB" & bucket_min == 25 ~ 36,
+    position == "QB" & bucket_min == 37 ~ 999,
+    position %in% c("RB", "WR") & bucket_min == 1 ~ 12,
+    position %in% c("RB", "WR") & bucket_min == 13 ~ 24,
+    position %in% c("RB", "WR") & bucket_min == 25 ~ 36,
+    position %in% c("RB", "WR") & bucket_min == 37 ~ 48,
+    position %in% c("RB", "WR") & bucket_min == 49 ~ 60,
+    position %in% c("RB", "WR") & bucket_min == 61 ~ 999,
+    position == "TE" & bucket_min == 1 ~ 6,
+    position == "TE" & bucket_min == 7 ~ 12,
+    position == "TE" & bucket_min == 13 ~ 18,
+    position == "TE" & bucket_min == 19 ~ 24,
+    position == "TE" & bucket_min == 25 ~ 36,
+    position == "TE" & bucket_min == 37 ~ 999,
+    position %in% c("K", "DST") & bucket_min == 1 ~ 6,
+    position %in% c("K", "DST") & bucket_min == 7 ~ 12,
+    position %in% c("K", "DST") & bucket_min == 13 ~ 18,
+    position %in% c("K", "DST") & bucket_min == 19 ~ 24,
+    position %in% c("K", "DST") & bucket_min == 25 ~ 32,
+    position %in% c("K", "DST") & bucket_min == 33 ~ 999,
+    TRUE ~ NA_real_
+  )
+  dplyr::case_when(
+    !is.finite(bucket_min) ~ NA_character_,
+    bucket_max >= 999 ~ paste0(as.integer(bucket_min), "+"),
+    TRUE ~ paste0(as.integer(bucket_min), "-", as.integer(bucket_max))
+  )
+}
+
+sos_apply_final_curve_smoothing <- function(
+    board,
+    prediction_season = 2026L,
+    output_dir = sos_production_output_dir(),
+    deadband = 0.05
+) {
+  if (is.null(board) || nrow(board) == 0L) {
+    return(list(board = board, detail = data.frame(), summary = data.frame()))
+  }
+  required <- c(
+    "position", "prediction_season", "player_key", "player",
+    "adjusted_projected_ppg", "adjusted_p50_points"
+  )
+  if (!all(required %in% names(board))) {
+    return(list(board = board, detail = data.frame(), summary = data.frame()))
+  }
+
+  out <- board
+  out$.curve_row_id <- seq_len(nrow(out))
+  current_path <- tempfile(fileext = ".csv")
+  on.exit(unlink(current_path), add = TRUE)
+  utils::write.csv(out, current_path, row.names = FALSE, na = "")
+  calibration <- build_core_sos_projection_rank_calibration(
+    prediction_season = prediction_season,
+    current_projection_path = current_path,
+    write_output = FALSE,
+    output_dir = output_dir
+  )
+  comparison <- calibration$current_bucket_comparison
+  if (is.null(comparison) || nrow(comparison) == 0L) {
+    out$.curve_row_id <- NULL
+    return(list(board = out, detail = data.frame(), summary = data.frame()))
+  }
+
+  metric_rows <- dplyr::bind_rows(
+    out |>
+      dplyr::transmute(
+        .curve_row_id = .data$.curve_row_id,
+        position = toupper(as.character(.data$position)),
+        target = "ppg",
+        projected_value_before = safe_numeric(.data$adjusted_projected_ppg)
+      ),
+    out |>
+      dplyr::transmute(
+        .curve_row_id = .data$.curve_row_id,
+        position = toupper(as.character(.data$position)),
+        target = "total",
+        projected_value_before = safe_numeric(.data$adjusted_p50_points)
+      )
+  ) |>
+    dplyr::group_by(.data$position, .data$target) |>
+    dplyr::arrange(dplyr::desc(.data$projected_value_before), .by_group = TRUE) |>
+    dplyr::mutate(projected_rank = dplyr::row_number()) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(
+      rank_bucket = sos_final_curve_rank_bucket(.data$position, .data$projected_rank)
+    ) |>
+    dplyr::left_join(
+      comparison |>
+        dplyr::select(
+          "position", "target", "rank_bucket",
+          "historical_avg_actual", "current_pct_vs_historical_actual",
+          "suggested_bucket_multiplier"
+        ),
+      by = c("position", "target", "rank_bucket"),
+      relationship = "many-to-one"
+    ) |>
+    dplyr::mutate(
+      smoothing_strength = dplyr::case_when(
+        .data$position == "QB" ~ 0.28,
+        .data$position == "RB" ~ 0.30,
+        .data$position == "WR" ~ 0.25,
+        .data$position == "TE" ~ 0.28,
+        .data$position %in% c("K", "DST") ~ 0.10,
+        TRUE ~ 0.20
+      ),
+      metric_multiplier = dplyr::case_when(
+        !is.finite(.data$suggested_bucket_multiplier) ~ 1,
+        !is.finite(.data$current_pct_vs_historical_actual) ~ 1,
+        abs(.data$current_pct_vs_historical_actual) <= .env$deadband ~ 1,
+        TRUE ~ 1 + .data$smoothing_strength * (.data$suggested_bucket_multiplier - 1)
+      ),
+      metric_multiplier = dplyr::case_when(
+        .data$position %in% c("K", "DST") ~ pmin(1.02, pmax(0.98, .data$metric_multiplier)),
+        TRUE ~ pmin(1.06, pmax(0.94, .data$metric_multiplier))
+      )
+    )
+
+  row_multiplier <- metric_rows |>
+    dplyr::group_by(.data$.curve_row_id) |>
+    dplyr::summarise(
+      curve_smoothing_multiplier_raw = exp(mean(log(pmax(0.01, .data$metric_multiplier)))),
+      .groups = "drop"
+    )
+  out <- out |>
+    dplyr::left_join(row_multiplier, by = ".curve_row_id", relationship = "one-to-one")
+
+  flag_columns <- intersect(
+    c(
+      "qb_final_review_projection_applied", "rb_final_review_projection_applied",
+      "wr_final_review_projection_applied", "te_final_review_projection_applied",
+      "dst_final_review_projection_applied", "qb_final_review_stat_applied",
+      "rb_final_review_stat_applied", "wr_final_review_stat_applied",
+      "te_final_review_stat_applied", "dst_final_review_stat_applied",
+      "nfl_context_brief_applied", "aug31_context_delta_applied",
+      "sep1_depth_context_applied", "sep2_post_cuts_context_applied"
+    ),
+    names(out)
+  )
+  explicit_context <- rep(FALSE, nrow(out))
+  for (column in flag_columns) {
+    explicit_context <- explicit_context |
+      out[[column]] %in% c(TRUE, "TRUE", "true", 1L, "1")
+  }
+  active_pool <- if ("active_projection_pool" %in% names(out)) {
+    out$active_projection_pool %in% c(TRUE, "TRUE", "true", 1L, "1")
+  } else {
+    rep(TRUE, nrow(out))
+  }
+  raw_multiplier <- dplyr::coalesce(safe_numeric(out$curve_smoothing_multiplier_raw), 1)
+  out$curve_smoothing_explicit_context_damped <- explicit_context
+  out$curve_smoothing_multiplier <- ifelse(
+    explicit_context,
+    1 + 0.70 * (raw_multiplier - 1),
+    raw_multiplier
+  )
+  out$curve_smoothing_multiplier[!active_pool] <- 1
+  out$curve_smoothing_multiplier <- dplyr::case_when(
+    toupper(as.character(out$position)) %in% c("K", "DST") ~
+      pmin(1.02, pmax(0.98, out$curve_smoothing_multiplier)),
+    TRUE ~ pmin(1.06, pmax(0.94, out$curve_smoothing_multiplier))
+  )
+  out$curve_smoothing_applied <- abs(out$curve_smoothing_multiplier - 1) > 1e-8
+  out$curve_smoothing_p50_before <- safe_numeric(out$adjusted_p50_points)
+  out$curve_smoothing_ppg_before <- safe_numeric(out$adjusted_projected_ppg)
+
+  range_columns <- intersect(
+    c(
+      "adjusted_p10_points", "adjusted_p25_points", "adjusted_p50_points",
+      "adjusted_p75_points", "adjusted_p90_points"
+    ),
+    names(out)
+  )
+  for (column in range_columns) {
+    out[[column]] <- pmax(0, safe_numeric(out[[column]]) * out$curve_smoothing_multiplier)
+  }
+  out$adjusted_projected_ppg <- pmax(
+    0,
+    safe_numeric(out$adjusted_projected_ppg) * out$curve_smoothing_multiplier
+  )
+  out <- sos_enforce_projection_ranges(out, range_columns)
+
+  stat_columns <- list(
+    QB = c(
+      "projected_pass_attempts", "projected_pass_yards", "projected_pass_td",
+      "projected_interceptions", "projected_rush_attempts", "projected_rush_yards",
+      "projected_rush_td", "projected_fumbles"
+    ),
+    RB = c(
+      "projected_rush_attempts", "projected_rush_yards", "projected_rush_td",
+      "projected_targets", "projected_receptions", "projected_receiving_yards",
+      "projected_receiving_td", "projected_air_yards", "projected_first_read_targets",
+      "projected_end_zone_targets", "projected_receiving_first_downs", "projected_fumbles"
+    ),
+    WR = c(
+      "projected_rush_attempts", "projected_rush_yards", "projected_rush_td",
+      "projected_targets", "projected_receptions", "projected_receiving_yards",
+      "projected_receiving_td", "projected_air_yards", "projected_first_read_targets",
+      "projected_end_zone_targets", "projected_receiving_first_downs", "projected_fumbles"
+    ),
+    TE = c(
+      "projected_rush_attempts", "projected_rush_yards", "projected_rush_td",
+      "projected_targets", "projected_receptions", "projected_receiving_yards",
+      "projected_receiving_td", "projected_air_yards", "projected_first_read_targets",
+      "projected_end_zone_targets", "projected_receiving_first_downs", "projected_fumbles"
+    ),
+    K = c(
+      "projected_fga", "projected_fgm", "projected_fga_40_49",
+      "projected_fgm_40_49", "projected_fga_50_plus", "projected_fgm_50_plus",
+      "projected_xpa", "projected_xpm"
+    ),
+    DST = c(
+      "projected_sacks", "projected_interceptions", "projected_fumbles",
+      "projected_defensive_tds", "projected_dst_fantasy_points"
+    )
+  )
+  for (position in names(stat_columns)) {
+    rows <- which(toupper(as.character(out$position)) == position & active_pool)
+    if (length(rows) == 0L) next
+    for (column in intersect(stat_columns[[position]], names(out))) {
+      out[[column]][rows] <- pmax(
+        0,
+        safe_numeric(out[[column]][rows]) * out$curve_smoothing_multiplier[rows]
+      )
+    }
+  }
+  if (all(c("projected_rush_yards", "projected_receiving_yards", "projected_scrimmage_yards") %in% names(out))) {
+    rows <- toupper(as.character(out$position)) %in% c("RB", "WR", "TE")
+    out$projected_scrimmage_yards[rows] <-
+      safe_numeric(out$projected_rush_yards[rows]) + safe_numeric(out$projected_receiving_yards[rows])
+  }
+  if (all(c("projected_rush_td", "projected_receiving_td", "projected_total_td") %in% names(out))) {
+    rows <- toupper(as.character(out$position)) %in% c("RB", "WR", "TE")
+    out$projected_total_td[rows] <-
+      safe_numeric(out$projected_rush_td[rows]) + safe_numeric(out$projected_receiving_td[rows])
+  }
+  if ("stat_target_p50_points" %in% names(out)) {
+    out$stat_target_p50_points <- safe_numeric(out$adjusted_p50_points)
+  }
+  if ("stat_implied_fantasy_points_after" %in% names(out)) {
+    out$stat_implied_fantasy_points_after <- sos_stat_implied_fantasy_points(out)
+  }
+  if (all(c("stat_implied_fantasy_points_after", "stat_target_p50_points") %in% names(out))) {
+    out$stat_reconciliation_abs_delta_after <- abs(
+      safe_numeric(out$stat_implied_fantasy_points_after) - safe_numeric(out$stat_target_p50_points)
+    )
+  }
+  out$curve_smoothing_p50_after <- safe_numeric(out$adjusted_p50_points)
+  out$curve_smoothing_ppg_after <- safe_numeric(out$adjusted_projected_ppg)
+  out$adjusted_average_range_score <- (
+    safe_numeric(out$adjusted_p25_points) + safe_numeric(out$adjusted_p50_points) +
+      safe_numeric(out$adjusted_p75_points)
+  ) / 3
+  out <- out |>
+    dplyr::group_by(.data$position) |>
+    dplyr::mutate(
+      manual_adjusted_projection_rank = rank(
+        -.data$adjusted_average_range_score,
+        ties.method = "first",
+        na.last = "keep"
+      )
+    ) |>
+    dplyr::ungroup()
+
+  detail <- metric_rows |>
+    dplyr::left_join(
+      out |>
+        dplyr::select(
+          ".curve_row_id", "player_key", "player",
+          "curve_smoothing_applied", "curve_smoothing_explicit_context_damped",
+          "curve_smoothing_multiplier"
+        ),
+      by = ".curve_row_id",
+      relationship = "many-to-one"
+    ) |>
+    dplyr::mutate(
+      projected_value_after = .data$projected_value_before * .data$curve_smoothing_multiplier
+    ) |>
+    dplyr::select(-".curve_row_id") |>
+    dplyr::arrange(
+      factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")),
+      .data$target,
+      .data$projected_rank
+    )
+  summary <- detail |>
+    dplyr::group_by(.data$position, .data$target, .data$rank_bucket) |>
+    dplyr::summarise(
+      rows = dplyr::n(),
+      historical_avg_actual = dplyr::first(.data$historical_avg_actual),
+      avg_before = mean(.data$projected_value_before, na.rm = TRUE),
+      avg_after = mean(.data$projected_value_after, na.rm = TRUE),
+      ratio_before = dplyr::if_else(
+        abs(.data$historical_avg_actual) > 0.0001,
+        .data$avg_before / .data$historical_avg_actual,
+        NA_real_
+      ),
+      ratio_after = dplyr::if_else(
+        abs(.data$historical_avg_actual) > 0.0001,
+        .data$avg_after / .data$historical_avg_actual,
+        NA_real_
+      ),
+      avg_multiplier = mean(.data$curve_smoothing_multiplier, na.rm = TRUE),
+      explicit_context_rows = sum(.data$curve_smoothing_explicit_context_damped, na.rm = TRUE),
+      status = dplyr::case_when(
+        !is.finite(.data$ratio_after) ~ "INSUFFICIENT_BASELINE",
+        abs(.data$ratio_before - 1) <= .env$deadband &
+          abs(.data$ratio_after - 1) <= 0.10 ~ "PRESERVED_IN_LINE",
+        abs(.data$ratio_after - 1) <= abs(.data$ratio_before - 1) + 1e-8 ~ "IMPROVED",
+        TRUE ~ "WATCH"
+      ),
+      .groups = "drop"
+    ) |>
+    dplyr::arrange(
+      factor(.data$position, levels = c("QB", "RB", "WR", "TE", "K", "DST")),
+      .data$target,
+      .data$rank_bucket
+    )
+  out$.curve_row_id <- NULL
+  list(board = out, detail = detail, summary = summary, calibration = calibration)
 }
 
 build_core_sos_projected_games_calibration <- function(
@@ -23100,14 +25801,62 @@ run_core_sos_projection_layer <- function(
       stop("DST final-review projection context audit failed.", call. = FALSE)
     }
   }
+  authoritative_depth_projection_baseline <- board
   nfl_context_brief <- sos_apply_nfl_context_brief(board, prediction_season)
   board <- nfl_context_brief$board
+  board <- sos_apply_aug22_k_projection_context(board, prediction_season)
+  aug31_context_delta <- sos_apply_aug31_context_delta(board, prediction_season)
+  board <- aug31_context_delta$board
+  sep1_depth_context_delta <- sos_apply_sep1_depth_context_delta(board, prediction_season)
+  board <- sep1_depth_context_delta$board
+  sep2_post_cuts_context_delta <- sos_apply_sep2_post_cuts_context_delta(board, prediction_season)
+  board <- sep2_post_cuts_context_delta$board
+  authoritative_depth_reconciliation <- sos_reconcile_authoritative_2026_depth_teams(
+    board,
+    baseline_board = authoritative_depth_projection_baseline,
+    prediction_season = prediction_season,
+    week = 1L
+  )
+  board <- authoritative_depth_reconciliation$board
   nfl_context_brief_audit <- nfl_context_brief$audit
   assign("core_sos_nfl_context_brief_audit", nfl_context_brief_audit, envir = .GlobalEnv)
+  assign("core_sos_aug31_context_delta_audit", aug31_context_delta$audit, envir = .GlobalEnv)
+  assign("core_sos_sep1_depth_context_audit", sep1_depth_context_delta$audit, envir = .GlobalEnv)
+  assign("core_sos_sep2_post_cuts_context_audit", sep2_post_cuts_context_delta$audit, envir = .GlobalEnv)
+  assign("core_sos_authoritative_depth_team_audit", authoritative_depth_reconciliation$audit, envir = .GlobalEnv)
+  assign("core_sos_authoritative_depth_team_summary", authoritative_depth_reconciliation$summary, envir = .GlobalEnv)
   if (isTRUE(write_output) && nrow(nfl_context_brief_audit) > 0L) {
     sos_try_write_csv(
       nfl_context_brief_audit,
       file.path(output_dir, paste0("core_sos_nfl_context_brief_audit_", prediction_season, ".csv"))
+    )
+  }
+  if (isTRUE(write_output) && nrow(aug31_context_delta$audit) > 0L) {
+    sos_try_write_csv(
+      aug31_context_delta$audit,
+      file.path(output_dir, paste0("core_sos_aug31_context_delta_audit_", prediction_season, ".csv"))
+    )
+  }
+  if (isTRUE(write_output) && nrow(sep1_depth_context_delta$audit) > 0L) {
+    sos_try_write_csv(
+      sep1_depth_context_delta$audit,
+      file.path(output_dir, paste0("core_sos_sep1_depth_context_audit_", prediction_season, ".csv"))
+    )
+  }
+  if (isTRUE(write_output) && nrow(sep2_post_cuts_context_delta$audit) > 0L) {
+    sos_try_write_csv(
+      sep2_post_cuts_context_delta$audit,
+      file.path(output_dir, paste0("core_sos_sep2_post_cuts_context_audit_", prediction_season, ".csv"))
+    )
+  }
+  if (isTRUE(write_output) && nrow(authoritative_depth_reconciliation$audit) > 0L) {
+    sos_try_write_csv(
+      authoritative_depth_reconciliation$audit,
+      file.path(output_dir, paste0("core_sos_authoritative_depth_team_audit_", prediction_season, ".csv"))
+    )
+    sos_try_write_csv(
+      authoritative_depth_reconciliation$summary,
+      file.path(output_dir, paste0("core_sos_authoritative_depth_team_summary_", prediction_season, ".csv"))
     )
   }
   range_sanity_audit <- NULL
@@ -23136,6 +25885,7 @@ run_core_sos_projection_layer <- function(
     ) {
       stop("Final-review stat promotion audit failed.", call. = FALSE)
     }
+    board <- sos_apply_nfl_context_post_stat_ranges(board)
     board <- sos_simulate_projection_finishes(
       board, "adjusted",
       "adjusted_p10_points", "adjusted_p50_points", "adjusted_p90_points",
@@ -23159,6 +25909,80 @@ run_core_sos_projection_layer <- function(
         by = c("position", "prediction_season", "player_key"),
         relationship = "one-to-one"
       )
+  }
+  final_curve_smoothing <- sos_apply_final_curve_smoothing(
+    board,
+    prediction_season = prediction_season,
+    output_dir = output_dir
+  )
+  board <- final_curve_smoothing$board
+  if (nrow(final_curve_smoothing$summary) > 0L && any(final_curve_smoothing$summary$status == "WATCH")) {
+    stop("Final SOS curve smoothing audit failed to improve at least one bucket.", call. = FALSE)
+  }
+  if (!is.null(stat_projection$wide) && nrow(stat_projection$wide) > 0L) {
+    board_key <- paste(board$position, board$prediction_season, board$player_key)
+    wide_key <- paste(
+      stat_projection$wide$position,
+      stat_projection$wide$prediction_season,
+      stat_projection$wide$player_key
+    )
+    matched_board_rows <- match(wide_key, board_key)
+    update_columns <- intersect(
+      c(
+        grep("^projected_", names(stat_projection$wide), value = TRUE),
+        "stat_target_p50_points", "stat_implied_fantasy_points_after",
+        "stat_reconciliation_abs_delta_after"
+      ),
+      names(board)
+    )
+    for (column in update_columns) {
+      stat_projection$wide[[column]] <- board[[column]][matched_board_rows]
+    }
+    final_alignment <- sos_apply_stat_alignment_status(
+      stat_projection$wide,
+      prediction_season = prediction_season
+    )
+    stat_projection$wide <- final_alignment$wide
+    stat_projection$stat_alignment_detail <- final_alignment$detail
+    stat_projection$stat_alignment_summary <- final_alignment$summary
+    alignment_columns <- intersect(
+      grep("^stat_alignment_", names(stat_projection$wide), value = TRUE),
+      names(board)
+    )
+    for (column in alignment_columns) {
+      board[[column]] <- stat_projection$wide[[column]][match(board_key, wide_key)]
+    }
+    if (isTRUE(write_output)) {
+      sos_try_write_csv(
+        stat_projection$wide,
+        file.path(output_dir, paste0("core_sos_stat_projection_wide_", prediction_season, ".csv"))
+      )
+      sos_try_write_csv(
+        stat_projection$stat_alignment_detail,
+        file.path(output_dir, paste0("core_sos_stat_alignment_review_", prediction_season, ".csv"))
+      )
+      sos_try_write_csv(
+        stat_projection$stat_alignment_summary,
+        file.path(output_dir, paste0("core_sos_stat_alignment_summary_", prediction_season, ".csv"))
+      )
+    }
+  }
+  board <- sos_simulate_projection_finishes(
+    board, "adjusted",
+    "adjusted_p10_points", "adjusted_p50_points", "adjusted_p90_points",
+    simulation_count
+  )
+  assign("core_sos_final_curve_smoothing_detail", final_curve_smoothing$detail, envir = .GlobalEnv)
+  assign("core_sos_final_curve_smoothing_summary", final_curve_smoothing$summary, envir = .GlobalEnv)
+  if (isTRUE(write_output)) {
+    sos_try_write_csv(
+      final_curve_smoothing$detail,
+      file.path(output_dir, paste0("core_sos_final_curve_smoothing_detail_", prediction_season, ".csv"))
+    )
+    sos_try_write_csv(
+      final_curve_smoothing$summary,
+      file.path(output_dir, paste0("core_sos_final_curve_smoothing_summary_", prediction_season, ".csv"))
+    )
   }
   manual_rank_templates <- if (!isTRUE(apply_manual_context) && isTRUE(write_output)) {
     write_core_sos_manual_rank_templates(
@@ -23196,6 +26020,9 @@ run_core_sos_projection_layer <- function(
   ledger <- sos_build_context_ledger(context, board, prediction_season)
   audit <- build_core_sos_projection_audit(board, context, prediction_season)
   assign("core_sos_projection_audit", audit, envir = .GlobalEnv)
+  if (isTRUE(write_output)) {
+    sos_try_write_csv(audit, file.path(output_dir, paste0("core_sos_projection_audit_", prediction_season, ".csv")))
+  }
   if (any(audit$status != "PASS")) {
     failed_audit <- audit[audit$status != "PASS", , drop = FALSE]
     stop(
@@ -23380,6 +26207,11 @@ run_core_sos_projection_layer <- function(
     wr_final_review_projection_audit = wr_final_review_projection_audit,
     te_final_review_projection_audit = te_final_review_projection_audit,
     dst_final_review_projection_audit = dst_final_review_projection_audit,
+    aug31_context_delta = aug31_context_delta,
+    sep1_depth_context_delta = sep1_depth_context_delta,
+    sep2_post_cuts_context_delta = sep2_post_cuts_context_delta,
+    authoritative_depth_reconciliation = authoritative_depth_reconciliation,
+    final_curve_smoothing = final_curve_smoothing,
     range_sanity_audit = range_sanity_audit,
     audit = audit,
     editorial_shell = editorial_shell
@@ -23562,7 +26394,7 @@ run_core_sos_production <- function(
     manifest <- dplyr::bind_rows(
       manifest,
       data.frame(
-          position = rep("CORE", 48L),
+          position = rep("CORE", 50L),
           artifact = c(
             "projection_board", "market_context_ledger", "manual_context_ledger", "projection_audit",
             "projection_backtest_predictions", "projection_backtest_metrics",
@@ -23592,7 +26424,7 @@ run_core_sos_production <- function(
           "manual_rank_blend_profile_comparison", "manual_rank_blend_profile_summary",
           "rank_signal_coherence_detail", "rank_signal_coherence_summary",
           "calibrated_rankings", "calibrated_rankings_summary",
-          "article_rankings"
+          "article_rankings", "final_curve_smoothing_detail", "final_curve_smoothing_summary"
         ),
         output_path = c(
           file.path(output_dir, paste0("core_sos_projection_board_", prediction_season, ".csv")),
@@ -23642,7 +26474,9 @@ run_core_sos_production <- function(
           file.path(output_dir, paste0("core_sos_rank_signal_coherence_summary_", prediction_season, ".csv")),
           file.path(output_dir, paste0("core_sos_calibrated_rankings_", prediction_season, ".csv")),
           file.path(output_dir, paste0("core_sos_calibrated_rankings_summary_", prediction_season, ".csv")),
-          file.path(output_dir, paste0("core_sos_article_rankings_", prediction_season, ".csv"))
+          file.path(output_dir, paste0("core_sos_article_rankings_", prediction_season, ".csv")),
+          file.path(output_dir, paste0("core_sos_final_curve_smoothing_detail_", prediction_season, ".csv")),
+          file.path(output_dir, paste0("core_sos_final_curve_smoothing_summary_", prediction_season, ".csv"))
         ),
         stringsAsFactors = FALSE
       )
@@ -23707,3 +26541,23 @@ message("SOS historical editor exports: build_core_sos_historical_editor_exports
 message("SOS projection rank calibration: build_core_sos_projection_rank_calibration()")
 message("SOS projected games calibration: build_core_sos_projected_games_calibration()")
 message("SOS games-calibrated projection board: build_core_sos_games_calibrated_projection_board()")
+
+# Keep actual-result publication separate from the approved preseason forecast.
+run_core_sos_week_closeout <- function(prediction_season = 2026L, completed_week = 1L) {
+  helper <- file.path(model_project_root, "model", "current_season_closeout.R")
+  if (!file.exists(helper)) stop("Missing current-season closeout helper: ", helper, call. = FALSE)
+  runtime <- new.env(parent = baseenv())
+  sys.source(helper, envir = runtime)
+  runtime$run_current_season_closeout(
+    project_root = model_project_root, nflfastr_root = model_paths$nflfastr_root_dir,
+    season = prediction_season, result_week = completed_week
+  )
+}
+message("SOS current-season actuals and publication holds: run_core_sos_week_closeout()")
+
+run_core_sos_2026_interim_upload <- function(rebuild_grades=FALSE) {
+  runtime <- new.env(parent=globalenv())
+  sys.source(file.path(model_project_root,"model/current_historical_publication.R"),runtime)
+  runtime$publish_current_historical_workbooks(model_project_root,rebuild_grades)
+}
+message("Approved interim 2026 actual-result uploads: run_core_sos_2026_interim_upload()")
